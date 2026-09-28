@@ -8,6 +8,7 @@ mod statistics;
 use crate::server::{app::App, error::ApiError};
 use axum::{
   Json, Router,
+  body::Body,
   extract::{Request, State},
   http::{HeaderValue, Method, StatusCode, header},
   middleware::{self, Next},
@@ -95,9 +96,112 @@ pub fn build_router(app: Arc<App>) -> Router {
       "/version",
       get(|| async { Json(json!({"name":"wish","version":env!("CARGO_PKG_VERSION")})) }),
     )
-    .fallback(|| async { ApiError::not_found() })
+    .fallback(static_or_spa)
     .layer(middleware::from_fn_with_state(app.clone(), cross_origin))
     .with_state(app)
+}
+/// Serve the bundled web interface: real files from the directory beside the
+/// executable, with index.html answering client-side routes, while /api keeps
+/// its JSON 404.
+async fn static_or_spa(State(app): State<Arc<App>>, request: Request) -> Response {
+  let Some(dir) = app.web_dir.clone() else {
+    return ApiError::not_found().into_response();
+  };
+  let method = request.method();
+  if method != Method::GET && method != Method::HEAD {
+    return ApiError::not_found().into_response();
+  }
+  let path = request.uri().path().to_owned();
+  if path == "/api" || path.starts_with("/api/") {
+    return ApiError::not_found().into_response();
+  }
+  let rel = percent_decode(&path).trim_start_matches('/').to_owned();
+  // Anything that could escape the web directory: dotdot climbs, drive letters
+  // and leading separators make PathBuf::join replace its base, NUL confuses the
+  // filesystem. Absolute paths never reach a real file this way.
+  let escapes = rel.starts_with('\\')
+    || rel.split(['/', '\\']).any(|part| part == ".." || part.contains(':') || part.contains('\0'));
+  let (file, index) = if rel.is_empty() || escapes {
+    (dir.join("index.html"), true)
+  } else {
+    let candidate = dir.join(&rel);
+    match tokio::fs::metadata(&candidate).await {
+      Ok(meta) if meta.is_file() => (candidate, false),
+      _ => (dir.join("index.html"), true),
+    }
+  };
+  let bytes = match tokio::fs::read(&file).await {
+    Ok(bytes) => bytes,
+    Err(_) => return ApiError::not_found().into_response(),
+  };
+  let mut response = Response::new(Body::from(bytes));
+  let headers = response.headers_mut();
+  headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type(&file, index)));
+  let cache = if index || !rel.starts_with("assets/") {
+    "no-cache"
+  } else {
+    "public, max-age=31536000, immutable"
+  };
+  headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+  response
+}
+
+fn content_type(file: &std::path::Path, index: bool) -> &'static str {
+  if index {
+    return "text/html; charset=utf-8";
+  }
+  match file
+    .extension()
+    .and_then(|extension| extension.to_str())
+    .map(str::to_ascii_lowercase)
+    .as_deref()
+  {
+    Some("html" | "htm") => "text/html; charset=utf-8",
+    Some("js" | "mjs") => "text/javascript; charset=utf-8",
+    Some("css") => "text/css; charset=utf-8",
+    Some("json" | "map") => "application/json; charset=utf-8",
+    Some("webmanifest") => "application/manifest+json; charset=utf-8",
+    Some("svg") => "image/svg+xml",
+    Some("png") => "image/png",
+    Some("jpg" | "jpeg") => "image/jpeg",
+    Some("gif") => "image/gif",
+    Some("webp") => "image/webp",
+    Some("avif") => "image/avif",
+    Some("ico") => "image/x-icon",
+    Some("woff") => "font/woff",
+    Some("woff2") => "font/woff2",
+    Some("ttf") => "font/ttf",
+    Some("otf") => "font/otf",
+    Some("txt" | "md") => "text/plain; charset=utf-8",
+    Some("wasm") => "application/wasm",
+    _ => "application/octet-stream",
+  }
+}
+
+/// Decode percent escapes in a URL path, byte by byte.
+fn percent_decode(input: &str) -> String {
+  let bytes = input.as_bytes();
+  let mut out = Vec::with_capacity(bytes.len());
+  let hex = |byte: u8| match byte {
+    b'0'..=b'9' => byte - b'0',
+    b'a'..=b'f' => byte - b'a' + 10,
+    b'A'..=b'F' => byte - b'A' + 10,
+    _ => 0xff,
+  };
+  let mut i = 0;
+  while i < bytes.len() {
+    if bytes[i] == b'%' && i + 2 < bytes.len() {
+      let (high, low) = (hex(bytes[i + 1]), hex(bytes[i + 2]));
+      if high != 0xff && low != 0xff {
+        out.push(high << 4 | low);
+        i += 3;
+        continue;
+      }
+    }
+    out.push(bytes[i]);
+    i += 1;
+  }
+  String::from_utf8_lossy(&out).into_owned()
 }
 /// Pages from other origins may call a server that requires a token: they cannot
 /// act without knowing it. A server without one answers its own origin only, so

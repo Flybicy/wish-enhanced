@@ -71,6 +71,10 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist/wish | Out-Null
           Copy-Item target/release/wish.exe dist/wish/
+          # The desktop window loads WebView2 through this loader; shipping it
+          # beside the exe keeps the app self-contained on bare systems.
+          Copy-Item installer/WebView2Loader.dll dist/wish/
+          Copy-Item installer/wish.ico dist/wish/
           Copy-Item -Recurse wish-web/dist dist/wish/web
           # keep the layout the platform.rs helper expects: niubash/niu.exe beside wish.exe
           if (Test-Path dist/niubash/niu.exe) {

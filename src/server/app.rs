@@ -28,6 +28,8 @@ pub struct App {
   pub shell: Arc<RwLock<crate::tool::shell::ShellCommand>>,
   pub sessions: AsyncMutex<BTreeMap<String, Arc<SessionSlot>>>,
   pub data_dir: PathBuf,
+  /// The directory holding the bundled web interface, when one is installed.
+  pub web_dir: Option<PathBuf>,
   pub token: Option<String>,
   pub stop: CancellationToken,
   pub tasks: TaskTracker,
@@ -173,6 +175,18 @@ impl App {
       config.subagents.max_depth,
     ));
     let subagents_enabled = config.subagents.enabled;
+    // The bundled web interface sits in a `web` folder beside the executable,
+    // unless the configuration points somewhere else.
+    let web_dir = config
+      .web_dir
+      .clone()
+      .filter(|dir| dir.is_dir())
+      .or_else(|| {
+        std::env::current_exe()
+          .ok()
+          .and_then(|exe| exe.parent().map(|dir| dir.join("web")))
+      })
+      .filter(|dir| dir.is_dir());
     let app = Arc::new(Self {
       storage,
       index,
@@ -184,6 +198,7 @@ impl App {
       shell,
       sessions: AsyncMutex::new(BTreeMap::new()),
       data_dir: config.data_dir.clone(),
+      web_dir,
       token,
       stop: CancellationToken::new(),
       tasks,

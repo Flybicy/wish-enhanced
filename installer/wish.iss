@@ -28,6 +28,11 @@ Name: "pathenv"; Description: "Add Wish to PATH (wish.exe and niubash commands)"
 
 [Files]
 Source: "..\dist\wish\wish.exe"; DestDir: "{app}"; Flags: ignoreversion
+; The WebView2 C entry point, searched beside the executable first, so the
+; desktop window also works on systems without Office/OneDrive/WSL loader copies.
+Source: "..\dist\wish\WebView2Loader.dll"; DestDir: "{app}"; Flags: ignoreversion
+; Shortcut and window branding.
+Source: "..\dist\wish\wish.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\wish\web\*"; DestDir: "{app}\web"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\dist\wish\niubash\*"; DestDir: "{app}\niubash"; Flags: ignoreversion recursesubdirs createallsubdirs
 
@@ -35,8 +40,8 @@ Source: "..\dist\wish\niubash\*"; DestDir: "{app}\niubash"; Flags: ignoreversion
 Name: "{userdocs}\Wish"; Permissions: users-modify
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\wish.ico"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\wish.ico"; Tasks: desktopicon
 
 [Registry]
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app};{app}\niubash"; Tasks: pathenv; Check: NeedsPath

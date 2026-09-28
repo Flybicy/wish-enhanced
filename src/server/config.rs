@@ -29,6 +29,8 @@ pub struct Config {
   pub subagents: SubagentsSettings,
   /// Workspace snapshotting (shadow git) for undo and redo.
   pub workspace_history: WorkspaceHistorySettings,
+  /// Directory holding the web interface to serve; defaults to a `web` folder beside the executable.
+  pub web_dir: Option<PathBuf>,
 }
 
 /// One MCP server process: a command, its arguments and optional environment overrides.
@@ -285,6 +287,7 @@ impl Default for Config {
       memory: MemorySettings::default(),
       subagents: SubagentsSettings::default(),
       workspace_history: WorkspaceHistorySettings::default(),
+      web_dir: None,
     }
   }
 }
