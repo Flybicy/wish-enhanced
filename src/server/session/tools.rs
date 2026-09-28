@@ -225,6 +225,12 @@ impl ToolExecutor for SessionTools {
         let Some((server, tool)) = rest.split_once('_') else {
           return ToolOutcome::Failed(format!("malformed mcp tool name: {name}"));
         };
+        // Remote HTTP servers first; stdio registry second. The guard must be
+        // dropped before the await point.
+        let http = app.mcp_http.lock().unwrap().get(server).cloned();
+        if let Some(http) = http {
+          return http.call_tool(tool, call.arguments.clone(), control).await;
+        }
         let Some(spec) = app.mcp_specs.lock().await.get(server).cloned() else {
           return ToolOutcome::Failed(format!("unknown mcp server: {server}"));
         };

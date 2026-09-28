@@ -40,10 +40,14 @@ pub struct McpServerConfig {
   pub env: BTreeMap<String, String>,
   /// Seconds before a tool call on this server gives up.
   pub call_timeout_secs: u64,
+  /// Streamable HTTP endpoint; when set, this server is remote (command is unused).
+  pub endpoint: Option<String>,
+  /// Extra HTTP headers for endpoint-based servers (e.g. Authorization).
+  pub headers: BTreeMap<String, String>,
 }
 impl Default for McpServerConfig {
   fn default() -> Self {
-    Self { command: String::new(), args: Vec::new(), env: BTreeMap::new(), call_timeout_secs: 60 }
+    Self { command: String::new(), args: Vec::new(), env: BTreeMap::new(), call_timeout_secs: 60, endpoint: None, headers: BTreeMap::new() }
   }
 }
 

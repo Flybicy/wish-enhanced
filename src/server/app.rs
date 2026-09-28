@@ -41,6 +41,8 @@ pub struct App {
   pub mcp_specs: Arc<tokio::sync::Mutex<BTreeMap<String, crate::tool::mcp::McpServerSpec>>>,
   /// Tool schemas captured from each MCP server at startup, namespaced per server.
   pub mcp_tools: std::sync::Mutex<BTreeMap<String, Vec<crate::protocol::Tool>>>,
+  /// Remote MCP servers over streamable HTTP, by ID; calls go straight to HTTP.
+  pub mcp_http: std::sync::Mutex<BTreeMap<String, Arc<crate::tool::mcp::HttpMcpServer>>>,
   /// The observational memory ledger, present when memory is enabled.
   pub memory: Option<Arc<crate::session::memory::MemoryStore>>,
   /// Subagent delegation pool and registry.
@@ -100,7 +102,33 @@ impl App {
     let mcp = Arc::new(crate::tool::mcp::McpRegistry::new());
     let mut mcp_specs = BTreeMap::new();
     let mut mcp_tools_map = BTreeMap::new();
+    let mut mcp_http_map = BTreeMap::new();
     for (id, server) in &config.mcp_servers {
+      // Capture each server's tool list once, at startup, so sessions never block on MCP I/O.
+      let mut capture = |tools: Vec<crate::protocol::Tool>| {
+        mcp_tools_map.insert(id.clone(), tools);
+      };
+      if let Some(endpoint) = &server.endpoint {
+        // Remote server: reachable over streamable HTTP, no child process.
+        let http = Arc::new(crate::tool::mcp::HttpMcpServer::new(
+          endpoint.clone(),
+          server.headers.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+          std::time::Duration::from_secs(server.call_timeout_secs.max(1)),
+        ));
+        let mut tools = Vec::new();
+        match http.tools_of().await {
+          Ok(list) => {
+            for mut tool in list {
+              tool.name = format!("mcp_{id}_{}", tool.name);
+              tools.push(tool);
+            }
+          }
+          Err(error) => eprintln!("mcp http server {id}: tools/list failed: {error}"),
+        }
+        capture(tools);
+        mcp_http_map.insert(id.clone(), http);
+        continue;
+      }
       if server.command.is_empty() {
         continue;
       }
@@ -113,7 +141,6 @@ impl App {
       if let Err(error) = mcp.start(id, &spec).await {
         eprintln!("mcp server {id} failed to start: {error}");
       } else {
-        // Capture the tool list once, at startup, so sessions never block on MCP I/O.
         let mut tools = Vec::new();
         if let Ok(list) = mcp.tools_of(id, &spec).await {
           for mut tool in list {
@@ -123,12 +150,13 @@ impl App {
         } else {
           eprintln!("mcp server {id}: tools/list failed");
         }
-        mcp_tools_map.insert(id.clone(), tools);
+        capture(tools);
         mcp_specs.insert(id.clone(), spec);
       }
     }
     let mcp_specs = Arc::new(tokio::sync::Mutex::new(mcp_specs));
     let mcp_tools = std::sync::Mutex::new(mcp_tools_map);
+    let mcp_http = std::sync::Mutex::new(mcp_http_map);
     let memory = if config.memory.enabled {
       match crate::session::memory::MemoryStore::open(config.data_dir.join("memory.sqlite")) {
         Ok(store) => Some(Arc::new(store)),
@@ -164,6 +192,7 @@ impl App {
       mcp,
       mcp_specs,
       mcp_tools,
+      mcp_http,
       memory,
       subagents,
       subagents_enabled,
