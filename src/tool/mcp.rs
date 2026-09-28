@@ -332,3 +332,136 @@ fn decode_result(value: Value) -> ToolOutcome {
     ToolOutcome::Success(json!({"content": text}))
   }
 }
+
+/// One MCP server reached over streamable HTTP: every request is a POST carrying the
+/// JSON-RPC message; replies arrive as one JSON body or as an SSE stream of messages.
+pub struct HttpMcpServer {
+  pub endpoint: String,
+  pub headers: BTreeMap<String, String>,
+  pub call_timeout: Duration,
+  next_id: AtomicI64,
+}
+
+impl HttpMcpServer {
+  pub fn new(endpoint: String, headers: BTreeMap<String, String>, call_timeout: Duration) -> Self {
+    Self { endpoint, headers, call_timeout, next_id: AtomicI64::new(1) }
+  }
+
+  fn client(&self) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+      .timeout(self.call_timeout)
+      .build()
+      .map_err(|error| format!("http client error: {error}"))
+  }
+
+  async fn post(&self, payload: &Value) -> Result<Value, String> {
+    let client = self.client()?;
+    let mut request = client
+      .post(&self.endpoint)
+      .header("Accept", "application/json, text/event-stream")
+      .header("MCP-Protocol-Version", "2025-06-18")
+      .json(payload);
+    for (key, value) in &self.headers {
+      request = request.header(key, value);
+    }
+    let response = request.send().await
+      .map_err(|error| format!("mcp http request failed: {error}"))?;
+    if !response.status().is_success() {
+      return Err(format!("mcp http returned HTTP {}", response.status()));
+    }
+    let content_type = response
+      .headers()
+      .get(reqwest::header::CONTENT_TYPE)
+      .and_then(|value| value.to_str().ok())
+      .unwrap_or("")
+      .to_owned();
+    let body = response.text().await
+      .map_err(|error| format!("mcp http body read failed: {error}"))?;
+    if content_type.contains("text/event-stream") {
+      for line in body.lines() {
+        if let Some(data) = line.strip_prefix("data:") {
+          if let Ok(message) = serde_json::from_str::<Value>(data.trim()) {
+            if message.get("result").is_some() || message.get("error").is_some() {
+              return decode_rpc(message);
+            }
+          }
+        }
+      }
+      return Err("mcp http stream carried no response".into());
+    }
+    let message: Value = serde_json::from_str(&body)
+      .map_err(|error| format!("mcp http body parse failed: {error}"))?;
+    decode_rpc(message)
+  }
+
+  /// Performs initialize and tools/list in one session-less exchange.
+  pub async fn tools_of(&self) -> Result<Vec<Tool>, String> {
+    self.post(&json!({
+      "jsonrpc": "2.0",
+      "id": self.next_id.fetch_add(1, Ordering::Relaxed),
+      "method": "initialize",
+      "params": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {},
+        "clientInfo": {"name": "wish", "version": env!("CARGO_PKG_VERSION")}
+      }
+    })).await?;
+    self.post(&json!({
+      "jsonrpc": "2.0",
+      "id": self.next_id.fetch_add(1, Ordering::Relaxed),
+      "method": "tools/list",
+      "params": {}
+    })).await.map(|response| {
+      let mut tools = Vec::new();
+      if let Some(items) = response.get("tools").and_then(Value::as_array) {
+        for item in items {
+          let Some(name) = item.get("name").and_then(Value::as_str) else { continue };
+          tools.push(Tool {
+            name: name.to_owned(),
+            description: item.get("description").and_then(Value::as_str).unwrap_or("").to_owned(),
+            input_schema: item.get("inputSchema").cloned().unwrap_or_else(|| json!({})),
+          });
+        }
+      }
+      tools
+    })
+  }
+
+  /// Calls one tool over HTTP; cancellation abandons the POST.
+  pub async fn call_tool(
+    &self,
+    tool: &str,
+    arguments: Value,
+    control: &crate::executor::ExecutionControl,
+  ) -> ToolOutcome {
+    let payload = json!({
+      "jsonrpc": "2.0",
+      "id": self.next_id.fetch_add(1, Ordering::Relaxed),
+      "method": "tools/call",
+      "params": {"name": tool, "arguments": arguments}
+    });
+    let call = self.post(&payload);
+    tokio::pin!(call);
+    tokio::select! {
+      result = &mut call => match result {
+        Ok(value) => decode_result(value),
+        Err(message) => ToolOutcome::Failed(message),
+      },
+      () = async {
+        while !control.is_cancelled() {
+          tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+      } => ToolOutcome::Cancelled,
+    }
+  }
+}
+
+/// Pulls the result (or error) out of one JSON-RPC reply envelope.
+fn decode_rpc(message: Value) -> Result<Value, String> {
+  if let Some(error) = message.get("error") {
+    let text = error.get("message").and_then(Value::as_str).unwrap_or("mcp error");
+    Err(text.to_owned())
+  } else {
+    Ok(message.get("result").cloned().unwrap_or(Value::Null))
+  }
+}
