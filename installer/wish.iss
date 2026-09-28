@@ -27,9 +27,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "pathenv"; Description: "Add Wish to PATH (wish.exe and niubash commands)"; Flags: checkedonce
 
 [Files]
-Source: "dist\wish\wish.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "dist\wish\web\*"; DestDir: "{app}\web"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "dist\wish\niubash\*"; DestDir: "{app}\niubash"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\wish\wish.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\wish\web\*"; DestDir: "{app}\web"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\wish\niubash\*"; DestDir: "{app}\niubash"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Dirs]
 Name: "{userdocs}\Wish"; Permissions: users-modify
