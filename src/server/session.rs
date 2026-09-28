@@ -153,8 +153,12 @@ impl SessionSlot {
       }
       _ => None,
     };
+    let memory = match app.upgrade() {
+      Some(app) => app.memory.clone().map(|store| crate::session::memory::MemoryRecallTool { store }),
+      None => None,
+    };
     let tools =
-      SessionTools::new(shell, &session, app.clone(), descriptor.id.clone(), image_dir.clone(), snapshot_tool, skills);
+      SessionTools::new(shell, &session, app.clone(), descriptor.id.clone(), image_dir.clone(), snapshot_tool, skills, memory);
     let status = Mutex::new(snapshot(&session));
     let (events, _) = broadcast::channel(256);
     Ok(Arc::new(Self {
@@ -194,6 +198,7 @@ impl SessionSlot {
         }
         "snapshot_checkpoint" | "snapshot_undo" | "snapshot_redo" => self.tools.snapshot.is_some(),
         "skill_search" => self.tools.skills.is_some(),
+        "memory_recall" => self.tools.memory.is_some(),
         name if name.starts_with("mcp_") => {
           let rest = &name["mcp_".len()..];
           match rest.split_once('_') {
@@ -221,6 +226,9 @@ impl SessionSlot {
     }
     if let Some(skills) = &self.tools.skills {
       config.tools.push(skills.get_specification());
+    }
+    if let Some(memory) = &self.tools.memory {
+      config.tools.push(memory.get_specification());
     }
     config.tools.extend(self.tools.mcp_specifications());
     Ok(config)

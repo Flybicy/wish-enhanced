@@ -5,6 +5,7 @@ mod control;
 mod error;
 pub mod history;
 mod lifecycle;
+pub mod memory;
 mod machine;
 mod persistence;
 mod queue;

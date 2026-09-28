@@ -39,6 +39,8 @@ pub struct App {
   pub mcp: Arc<crate::tool::mcp::McpRegistry>,
   /// The launch specifications of every configured MCP server, by ID.
   pub mcp_specs: Arc<tokio::sync::Mutex<BTreeMap<String, crate::tool::mcp::McpServerSpec>>>,
+  /// The observational memory ledger, present when memory is enabled.
+  pub memory: Option<Arc<crate::session::memory::MemoryStore>>,
 }
 impl App {
   pub async fn open(config: &Config, config_path: PathBuf) -> Result<Arc<Self>, ApiError> {
@@ -108,6 +110,17 @@ impl App {
       }
     }
     let mcp_specs = Arc::new(tokio::sync::Mutex::new(mcp_specs));
+    let memory = if config.memory.enabled {
+      match crate::session::memory::MemoryStore::open(config.data_dir.join("memory.sqlite")) {
+        Ok(store) => Some(Arc::new(store)),
+        Err(error) => {
+          eprintln!("memory store failed to open: {error}");
+          None
+        }
+      }
+    } else {
+      None
+    };
     let app = Arc::new(Self {
       storage,
       index,
@@ -126,6 +139,7 @@ impl App {
       web,
       mcp,
       mcp_specs,
+      memory,
     });
     crate::server::codex_login::start_refresh_worker(&app);
     Ok(app)

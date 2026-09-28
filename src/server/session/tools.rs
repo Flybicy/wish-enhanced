@@ -25,6 +25,8 @@ pub struct SessionTools {
   pub snapshot: Option<crate::tool::snapshot::SnapshotTool>,
   /// Prompt skills loaded from the data directory.
   pub skills: Option<crate::server::skills::SkillSearchTool>,
+  /// Long-term memory recall over the shared ledger.
+  pub memory: Option<crate::session::memory::MemoryRecallTool>,
 }
 impl SessionTools {
   pub fn new(
@@ -35,6 +37,7 @@ impl SessionTools {
     image_dir: PathBuf,
     snapshot: Option<crate::tool::snapshot::SnapshotTool>,
     skills: Option<crate::server::skills::SkillSearchTool>,
+    memory: Option<crate::session::memory::MemoryRecallTool>,
   ) -> Self {
     Self {
       shell,
@@ -45,6 +48,7 @@ impl SessionTools {
       image_dir,
       snapshot,
       skills,
+      memory,
     }
   }
   pub fn get_history_specifications(&self) -> Vec<crate::protocol::Tool> {
@@ -212,6 +216,12 @@ impl ToolExecutor for SessionTools {
           return ToolOutcome::Failed("skills are disabled in the configuration".into());
         };
         skills.execute(call)
+      }
+      "memory_recall" => {
+        let Some(memory) = &self.memory else {
+          return ToolOutcome::Failed("memory is disabled in the configuration".into());
+        };
+        memory.execute(call, control).await
       }
       name if name.starts_with("mcp_") => {
         let Some(app) = self.app.upgrade() else {
