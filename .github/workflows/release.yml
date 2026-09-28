@@ -78,7 +78,7 @@ jobs:
           }
 
       - name: Build installer (Inno Setup)
-        uses: Minionguyjpro/Inno-Setup-Action@v1.2
+        uses: Minionguyjpro/Inno-Setup-Action@v1.2.9
         with:
           path: installer/wish.iss
           options: /Odist
