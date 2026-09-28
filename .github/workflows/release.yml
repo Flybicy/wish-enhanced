@@ -33,7 +33,7 @@ jobs:
 
       - name: Build wish-core (release)
         run: cargo build --release
-        working-directory: wish-core
+        working-directory: .
 
       - name: Build wish-web
         run: |
@@ -52,7 +52,13 @@ jobs:
             Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "$env:TEMP\niubash.zip"
             Expand-Archive "$env:TEMP\niubash.zip" -DestinationPath "$env:TEMP\niubash"
             New-Item -ItemType Directory -Force -Path dist/niubash | Out-Null
-            Copy-Item "$env:TEMP\niubash/*" dist/niubash -Recurse -Force
+            # The release zip nests one versioned directory; flatten whichever layout arrives.
+            $nested = Get-ChildItem "$env:TEMP\niubash" -Directory | Select-Object -First 1
+            if ($nested -and (Test-Path (Join-Path $nested.FullName "niu.exe"))) {
+              Copy-Item "$($nested.FullName)/*" dist/niubash -Recurse -Force
+            } else {
+              Copy-Item "$env:TEMP\niubash/*" dist/niubash -Recurse -Force
+            }
           } else {
             Write-Host "::warning::no niubash x64 asset found; building from source"
             git clone --depth 1 https://github.com/unixwin/niubash.git niubash-src
@@ -64,7 +70,7 @@ jobs:
       - name: Assemble distribution
         run: |
           New-Item -ItemType Directory -Force -Path dist/wish | Out-Null
-          Copy-Item wish-core/target/release/wish.exe dist/wish/
+          Copy-Item target/release/wish.exe dist/wish/
           Copy-Item -Recurse wish-web/dist dist/wish/web
           # keep the layout the platform.rs helper expects: niubash/niu.exe beside wish.exe
           if (Test-Path dist/niubash/niu.exe) {

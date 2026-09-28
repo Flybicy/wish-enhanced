@@ -7,14 +7,14 @@
 #define MyAppExeName "wish.exe"
 
 [Setup]
-AppId={{7E1F0B4A-9C2D-4E3B-8F5A-WISHENH00001}
+AppId={{7E1F0B4A9C2D4E3B8F5A6B7C8D9E0F11}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\Wish
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
-LicenseFile=wish-core\LICENSE
+LicenseFile=LICENSE
 OutputBaseFilename=wish-setup-{#MyAppVersion}
 Compression=lzma2/max
 SolidCompression=yes
