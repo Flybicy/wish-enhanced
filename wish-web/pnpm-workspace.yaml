@@ -1,0 +1,15 @@
+packages:
+  - .
+storeDir: .cache/pnpm/store
+cacheDir: .cache/pnpm/cache
+saveExact: true
+allowBuilds:
+  esbuild: true
+  vue-demi: true
+minimumReleaseAgeExclude:
+  - '@types/node@22.20.2'
+# Freeze-family fixes: KeepAlive-detach compensation guards, stale-adjustment
+# expiry and in-range scroll writes (see patches file; tools/virtual-clamped-adjustment.test.ts).
+patchedDependencies:
+  '@tanstack/virtual-core@3.17.9': patches/@tanstack__virtual-core@3.17.9.patch
+  reka-ui@2.10.4: patches/reka-ui@2.10.4.patch

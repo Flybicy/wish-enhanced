@@ -1,0 +1,167 @@
+<script setup lang="ts">
+import { computed, inject, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue';
+import { usePageActivity } from '../composables/usePageActivity.ts';
+// Centered confirm/content modal on Reka primitives (title/description
+// wired for a11y). While `dismissable` is false no path closes it — Esc,
+// overlay, close button are all suppressed; the owner resolves the busy work.
+import { DialogRoot, DialogPortal, DialogOverlay, DialogContent, DialogTitle, DialogDescription } from 'reka-ui';
+
+import { sessionPanelCloseKey } from '../composables/sessionPanel.ts';
+import Icon from './Icon.vue';
+import BubbleSurface from './BubbleSurface.vue';
+import { i18n } from '../../core/i18n/index.ts';
+import { useDialogLayer } from '../composables/useDialogLayer.ts';
+import { useDialogFocus } from '../composables/useDialogFocus.ts';
+const focus = useDialogFocus();
+const pageActive = usePageActivity();
+
+const props = withDefaults(defineProps<{ open: boolean; title: string; beforeClose?: () => boolean | Promise<boolean>; layer?: number; wide?: boolean; page?: boolean; back?: () => void; contentClass?: string; dismissable?: boolean; closeButton?: boolean; floating?: boolean; anchor?: HTMLElement; compact?: boolean }>(), { dismissable: true, closeButton: true });
+const emit = defineEmits<{ close: [] }>();
+const closing = ref(false);
+let closeCompleted = false;
+let closeTimer: ReturnType<typeof setTimeout> | undefined;
+function clearCloseTimer() {
+  if (closeTimer !== undefined) clearTimeout(closeTimer);
+  closeTimer = undefined;
+}
+function finishClose() {
+  if (!closing.value || closeCompleted || !pageActive.value) return;
+  closeCompleted = true;
+  clearCloseTimer();
+  emit('close');
+}
+const layer = useDialogLayer(() => props.layer ?? (props.floating ? 64 : 60));
+const bubble = computed(() => props.floating || (!props.page && !!props.contentClass?.split(' ').includes('session-window')));
+// Compact cards drop the head and footer bands: the title joins the content
+// flow and the actions follow it. Page sheets keep their head (back button).
+const compactCard = computed(() => props.compact && !props.page);
+const panelClose = inject(sessionPanelCloseKey, null);
+watch([bubble, pageActive], ([value, active]) => {
+  if (!panelClose) return;
+  if (value && active) panelClose.value = requestClose;
+  else if (panelClose.value === requestClose) panelClose.value = null;
+}, { immediate: true });
+onBeforeUnmount(() => { if (panelClose?.value === requestClose) panelClose.value = null; });
+function opened(event: Event) {
+  if (bubble.value) event.preventDefault();
+  else focus.opened(event);
+}
+// A drag that selects text inside a field must stay owned by that field.
+// Without pointer capture the browser hands the selection to the document the
+// moment the pointer crosses the window edge, and with nothing selectable
+// under it (the overlay) the whole selection silently collapses — the user's
+// drag-select just vanishes. Capturing keeps the drag (and the selection)
+// inside the field, clamped at its bounds; dropping text between fields uses
+// the drag-and-drop channel, which pointer capture does not touch.
+function ownFieldDrag(event: Event) {
+  const target = event.target as HTMLElement | null;
+  if (target?.matches?.('input, textarea') && target.isConnected) {
+    try { target.setPointerCapture((event as PointerEvent).pointerId); } catch { /* already gone */ }
+  }
+}
+function outside(event: Event) {
+  const target = (event as CustomEvent).detail?.originalEvent?.target as Node | undefined;
+  if ((target instanceof Element && target.closest('.pwa-update')) || !props.dismissable || (props.floating && target && props.anchor?.contains(target)) || (bubble.value && (event.target as Element)?.closest?.('[data-session-panel]'))) event.preventDefault();
+}
+watch(() => props.open, open => { if (open) { clearCloseTimer(); closing.value = false; closeCompleted = false; } });
+watch(pageActive, active => { if (!active) { clearCloseTimer(); closing.value = false; closeCompleted = false; } }, { flush: 'sync' });
+watch([pageActive, bubble], async ([active]) => { if (active) { await nextTick(); positionBubble(); } });
+const anchorStyle = ref<Record<string, string>>({});
+function positionBubble() {
+  if (!bubble.value) return;
+  if (props.floating) {
+    const rect = props.anchor?.getBoundingClientRect();
+    const width = Math.min(480, innerWidth - 40);
+    let height = Math.min(560, innerHeight * .72);
+    let right = 24;
+    let top = innerHeight * .14;
+    if (rect) {
+      if (rect.left >= width + 32) {
+        right = innerWidth - rect.left + 12;
+        top = Math.max(20, Math.min(rect.top - 12, innerHeight - height - 20));
+      } else {
+        right = Math.max(20, Math.min(innerWidth - width - 20, innerWidth - rect.right));
+        const below = innerHeight - rect.bottom - 28;
+        const above = rect.top - 28;
+        height = Math.min(height, Math.max(above, below));
+        top = below >= above ? rect.bottom + 8 : rect.top - height - 8;
+      }
+    }
+    anchorStyle.value = { right: `${right}px`, top: `${top}px`, maxHeight: `${height}px` };
+    return;
+  }
+  const button = document.querySelector('.chatbar [data-session-panel][aria-pressed="true"]');
+  if (!button) return;
+  const rect = button.getBoundingClientRect();
+  const top = rect.bottom + 10;
+  anchorStyle.value = { right: `${Math.max(16, innerWidth - rect.right - 8)}px`, top: `${top}px`, maxHeight: `calc(100dvh - ${top + 16}px)` };
+}
+const trackBubblePosition = () => { positionBubble(); window.addEventListener('resize', positionBubble); window.addEventListener('scroll', positionBubble, true); };
+const untrackBubblePosition = () => { window.removeEventListener('resize', positionBubble); window.removeEventListener('scroll', positionBubble, true); };
+// Only bubble-mode modals follow the window. Detail modals mount inside
+// every virtualized row; unconditional per-row window scroll/resize
+// listeners (capture phase) turned each scroll into a rows-sized fan-out.
+watch(bubble, value => { value ? trackBubblePosition() : untrackBubblePosition(); });
+onMounted(() => { positionBubble(); if (bubble.value) trackBubblePosition(); });
+onBeforeUnmount(() => { untrackBubblePosition(); clearCloseTimer(); });
+let checkingClose = false;
+async function requestClose() {
+  if (!pageActive.value || !props.dismissable || closing.value) return;
+  if (checkingClose) return;
+  if (props.beforeClose) {
+    checkingClose = true;
+    try { if (!await props.beforeClose()) return; } finally { checkingClose = false; }
+    if (!pageActive.value) return;
+  }
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) emit('close');
+  else {
+    closeCompleted = false;
+    closing.value = true;
+    // Keep the exit animation, but finish even if the browser cancels it.
+    closeTimer = setTimeout(finishClose, 300);
+  }
+}
+function onCloseAnimationEnd(event: AnimationEvent) {
+  if (event.target === event.currentTarget && ['popup-fade-out', 'page-out', 'session-panel-out', 'session-bubble-out', 'config-bubble-out'].includes(event.animationName)) finishClose();
+}
+defineExpose({ close: requestClose });
+</script>
+
+<template>
+  <DialogRoot :modal="!bubble" :open="pageActive && open && !closing" @update:open="(v: boolean) => { if (!v) requestClose(); }">
+    <DialogPortal v-if="pageActive">
+      <DialogOverlay v-if="!bubble" class="modal-overlay" :style="{ zIndex: layer }" />
+      <DialogContent @pointerdown.capture="ownFieldDrag" @animationend="onCloseAnimationEnd" @open-auto-focus="opened" @close-auto-focus="focus.closed" class="modal-card" :class="[{ wide, 'modal-page': page, 'session-bubble': bubble && !floating, 'config-bubble': floating, compact: compactCard }, contentClass]" :style="{ ...(bubble ? anchorStyle : {}), zIndex: layer + 1 }" :aria-describedby="undefined"
+        @escape-key-down="(e: KeyboardEvent) => { if (dismissable === false) e.preventDefault(); else if (page && back) { e.preventDefault(); back(); } }"
+        @focus-outside="event => { if (floating) event.preventDefault(); }"
+        @interact-outside="outside"
+        @pointer-down-outside="outside">
+        <BubbleSurface v-if="bubble && !floating" class="session-bubble-surface" side="top" :tail-x="24" align-end />
+        <DialogTitle v-if="bubble && !floating" class="visually-hidden">{{ title }}</DialogTitle>
+        <div v-else-if="!compactCard" class="modal-head">
+          <button v-if="page" type="button" class="btn ghost icon-only" :disabled="dismissable === false"
+            :aria-label="i18n.t('chatbar.back')" @click="back ? back() : requestClose()"><Icon name="arrow-left" /></button>
+          <DialogTitle class="modal-title">{{ title }}</DialogTitle>
+          <div class="modal-head-actions">
+            <slot name="actions" />
+            <button v-if="!page && closeButton" type="button" class="btn ghost icon-only" :disabled="dismissable === false" :aria-label="i18n.t('common.close')"
+              @click="requestClose">
+              <Icon name="x" />
+            </button>
+          </div>
+        </div>
+        <div class="modal-body">
+          <template v-if="compactCard">
+            <DialogTitle :class="$slots['compact-heading'] ? 'visually-hidden' : 'modal-flow-title'">{{ title }}</DialogTitle>
+            <slot name="compact-heading" />
+          </template>
+          <slot />
+        </div>
+        <div v-if="$slots.footer" :class="compactCard ? 'modal-actions' : 'modal-foot'">
+          <DialogDescription v-if="$slots.description" as="div" class="visually-hidden"><slot name="description" /></DialogDescription>
+          <slot name="footer" />
+        </div>
+      </DialogContent>
+    </DialogPortal>
+  </DialogRoot>
+</template>
