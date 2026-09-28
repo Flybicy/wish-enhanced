@@ -81,18 +81,18 @@ jobs:
         uses: Minionguyjpro/Inno-Setup-Action@v1.2.9
         with:
           path: installer/wish.iss
-          options: /O..\dist
+          options: /Odist
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: wish-installer
           path: |
-            dist/*.exe
+            installer/dist/wish-setup-*.exe
             dist/wish/**
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.exe
+          files: installer/dist/wish-setup-*.exe
