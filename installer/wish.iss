@@ -48,8 +48,8 @@ begin
 end;
 
 [Run]
+; Double-click shell mode: the exe self-configures and opens the web interface.
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
-Filename: "{app}\{#MyAppExeName}"; Parameters: "--config ""{userdocs}\Wish\config.json"""; Flags: postinstall runhidden; 
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\web"
