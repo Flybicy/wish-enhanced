@@ -71,40 +71,21 @@ impl SessionTools {
     self.app.upgrade()
   }
   /// Whether an MCP server with this ID started successfully.
-  pub fn mcp_registered(&self, server: &str) -> bool {    self
+  pub fn mcp_registered(&self, server: &str) -> bool {
+    self
       .app
       .upgrade()
-      .map(|app| {
-        app
-          .mcp_specs
-          .blocking_lock()
-          .contains_key(server)
-      })
+      .map(|app| app.mcp_tools.lock().unwrap().contains_key(server))
       .unwrap_or(false)
   }
-  /// The tool schemas of every running MCP server, namespaced as mcp_<server>_<tool>.
+  /// The tool schemas of every running MCP server, captured at startup and
+  /// namespaced as mcp_<server>_<tool>. Synchronous by design: no MCP I/O here.
   pub fn mcp_specifications(&self) -> Vec<crate::protocol::Tool> {
     let Some(app) = self.app.upgrade() else {
       return Vec::new();
     };
-    let specs = app.mcp_specs.blocking_lock();
-    let mut tools = Vec::new();
-    for (server, _spec) in specs.iter() {
-      let registry = app.mcp.clone();
-      let spec = specs.get(server).cloned();
-      let Some(spec) = spec else { continue };
-      if let Ok(list) = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::try_current()
-          .map(|handle| handle.block_on(registry.tools_of(server, &spec)))
-          .unwrap_or_else(|_| Err("no runtime".into()))
-      }) {
-        for mut tool in list {
-          tool.name = format!("mcp_{server}_{}", tool.name);
-          tools.push(tool);
-        }
-      }
-    }
-    tools
+    let specs = app.mcp_tools.lock().unwrap();
+    specs.values().flatten().cloned().collect()
   }
   async fn execute_shell(&self, call: &ToolCall, control: &ExecutionControl) -> ToolOutcome {
     let Some(shell) = &self.shell else {
