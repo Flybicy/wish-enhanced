@@ -33,6 +33,12 @@ pub struct App {
   pub tasks: TaskTracker,
   /// Serializes operation registration against shutdown, never held across awaits.
   pub closing: Mutex<bool>,
+  /// Shared web access tools; present when the configuration enables them.
+  pub web: Option<Arc<crate::tool::web::WebTool>>,
+  /// MCP server registry; servers start from the config and stop at shutdown.
+  pub mcp: Arc<crate::tool::mcp::McpRegistry>,
+  /// The launch specifications of every configured MCP server, by ID.
+  pub mcp_specs: Arc<tokio::sync::Mutex<BTreeMap<String, crate::tool::mcp::McpServerSpec>>>,
 }
 impl App {
   pub async fn open(config: &Config, config_path: PathBuf) -> Result<Arc<Self>, ApiError> {
@@ -69,6 +75,39 @@ impl App {
       .as_ref()
       .map(|key| crate::server::config::read_secret(key).map_err(ApiError::bad_request))
       .transpose()?;
+    let web = if config.web.enabled {
+      let provider = match config.web.provider {
+        crate::server::config::WebProvider::DuckDuckGo => crate::tool::web::SearchProvider::DuckDuckGo,
+        crate::server::config::WebProvider::Tavily => crate::tool::web::SearchProvider::Tavily,
+        crate::server::config::WebProvider::Brave => crate::tool::web::SearchProvider::Brave,
+      };
+      Some(Arc::new(crate::tool::web::WebTool::new(crate::tool::web::WebConfig {
+        provider,
+        fetch_timeout: std::time::Duration::from_secs(config.web.fetch_timeout_secs.max(1)),
+        api_key_env: None,
+      })))
+    } else {
+      None
+    };
+    let mcp = Arc::new(crate::tool::mcp::McpRegistry::new());
+    let mut mcp_specs = BTreeMap::new();
+    for (id, server) in &config.mcp_servers {
+      if server.command.is_empty() {
+        continue;
+      }
+      let spec = crate::tool::mcp::McpServerSpec {
+        command: server.command.clone(),
+        args: server.args.clone(),
+        env: server.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        call_timeout: std::time::Duration::from_secs(server.call_timeout_secs.max(1)),
+      };
+      if let Err(error) = mcp.start(id, &spec).await {
+        eprintln!("mcp server {id} failed to start: {error}");
+      } else {
+        mcp_specs.insert(id.clone(), spec);
+      }
+    }
+    let mcp_specs = Arc::new(tokio::sync::Mutex::new(mcp_specs));
     let app = Arc::new(Self {
       storage,
       index,
@@ -84,6 +123,9 @@ impl App {
       stop: CancellationToken::new(),
       tasks,
       closing: Mutex::new(false),
+      web,
+      mcp,
+      mcp_specs,
     });
     crate::server::codex_login::start_refresh_worker(&app);
     Ok(app)
@@ -218,6 +260,7 @@ impl App {
   pub async fn finish_shutdown(&self) -> Result<(), ApiError> {
     self.tasks.close();
     self.tasks.wait().await;
+    self.mcp.shutdown().await;
     for slot in self.sessions.lock().await.values() {
       if let Some(shell) = &slot.tools.shell {
         shell.shutdown().await.map_err(ApiError::internal)?;

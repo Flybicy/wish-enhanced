@@ -115,9 +115,30 @@ impl SessionSlot {
     };
     let image_dir = std::path::absolute(data_dir.join("blobs").join(&descriptor.id))
       .map_err(ApiError::internal)?;
+    // Workspace snapshots follow the application setting: true, false, or "auto".
+    let snapshot_tool = {
+      let enabled = match app.upgrade() {
+        Some(app) => {
+          let configuration = app.configuration.lock().await;
+          configuration.config.workspace_history.enabled.clone()
+        }
+        None => "auto".into(),
+      };
+      let want = match enabled.as_str() {
+        "true" => true,
+        "false" => false,
+        _ => crate::tool::snapshot::looks_like_project(&descriptor.cwd),
+      };
+      if want {
+        let git_dir = data_dir.join("snapshots").join(&descriptor.id).join("repo.git");
+        Some(crate::tool::snapshot::SnapshotTool::new(descriptor.cwd.clone(), git_dir))
+      } else {
+        None
+      }
+    };
     let tasks = app.upgrade().expect("session application is alive").tasks.clone();
     let tools =
-      SessionTools::new(shell, &session, app.clone(), descriptor.id.clone(), image_dir.clone());
+      SessionTools::new(shell, &session, app.clone(), descriptor.id.clone(), image_dir.clone(), snapshot_tool);
     let status = Mutex::new(snapshot(&session));
     let (events, _) = broadcast::channel(256);
     Ok(Arc::new(Self {
@@ -152,6 +173,17 @@ impl SessionSlot {
         "shell_start" | "shell_edit" | "shell_poll" | "shell_write" | "shell_kill" => {
           self.tools.shell.is_some()
         }
+        "web_search" | "fetch_content" | "get_search_content" => {
+          self.tools.web_enabled()
+        }
+        "snapshot_checkpoint" | "snapshot_undo" | "snapshot_redo" => self.tools.snapshot.is_some(),
+        name if name.starts_with("mcp_") => {
+          let rest = &name["mcp_".len()..];
+          match rest.split_once('_') {
+            Some((server, _)) => self.tools.mcp_registered(server),
+            None => false,
+          }
+        }
         _ => false,
       };
       if !is_valid {
@@ -164,6 +196,13 @@ impl SessionSlot {
     if let Some(shell) = &self.tools.shell {
       config.tools.extend(shell.get_specifications());
     }
+    if let Some(web) = self.tools.web_specifications() {
+      config.tools.extend(web);
+    }
+    if let Some(snapshot) = &self.tools.snapshot {
+      config.tools.extend(snapshot.get_specifications());
+    }
+    config.tools.extend(self.tools.mcp_specifications());
     Ok(config)
   }
   pub fn describe(&self) -> Value {

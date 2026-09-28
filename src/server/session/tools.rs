@@ -21,6 +21,8 @@ pub struct SessionTools {
   session_id: String,
   handle: SessionHandle,
   image_dir: PathBuf,
+  /// Workspace snapshots for undo and redo; present when snapshotting is enabled.
+  pub snapshot: Option<crate::tool::snapshot::SnapshotTool>,
 }
 impl SessionTools {
   pub fn new(
@@ -29,6 +31,7 @@ impl SessionTools {
     app: Weak<App>,
     session_id: String,
     image_dir: PathBuf,
+    snapshot: Option<crate::tool::snapshot::SnapshotTool>,
   ) -> Self {
     Self {
       shell,
@@ -37,10 +40,56 @@ impl SessionTools {
       session_id,
       handle: session.create_handle(),
       image_dir,
+      snapshot,
     }
   }
   pub fn get_history_specifications(&self) -> Vec<crate::protocol::Tool> {
     self.history.get_specifications()
+  }
+  /// Whether the application has web tools enabled.
+  pub fn web_enabled(&self) -> bool {
+    self.app.upgrade().map(|app| app.web.is_some()).unwrap_or(false)
+  }
+  /// The web tool schemas, when the application has them enabled.
+  pub fn web_specifications(&self) -> Option<Vec<crate::protocol::Tool>> {
+    self.app.upgrade().and_then(|app| app.web.clone()).map(|web| web.get_specifications())
+  }
+  /// Whether an MCP server with this ID started successfully.
+  pub fn mcp_registered(&self, server: &str) -> bool {
+    self
+      .app
+      .upgrade()
+      .map(|app| {
+        app
+          .mcp_specs
+          .blocking_lock()
+          .contains_key(server)
+      })
+      .unwrap_or(false)
+  }
+  /// The tool schemas of every running MCP server, namespaced as mcp_<server>_<tool>.
+  pub fn mcp_specifications(&self) -> Vec<crate::protocol::Tool> {
+    let Some(app) = self.app.upgrade() else {
+      return Vec::new();
+    };
+    let specs = app.mcp_specs.blocking_lock();
+    let mut tools = Vec::new();
+    for (server, _spec) in specs.iter() {
+      let registry = app.mcp.clone();
+      let spec = specs.get(server).cloned();
+      let Some(spec) = spec else { continue };
+      if let Ok(list) = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::try_current()
+          .map(|handle| handle.block_on(registry.tools_of(server, &spec)))
+          .unwrap_or_else(|_| Err("no runtime".into()))
+      }) {
+        for mut tool in list {
+          tool.name = format!("mcp_{server}_{}", tool.name);
+          tools.push(tool);
+        }
+      }
+    }
+    tools
   }
   async fn execute_shell(&self, call: &ToolCall, control: &ExecutionControl) -> ToolOutcome {
     let Some(shell) = &self.shell else {
@@ -138,6 +187,34 @@ impl ToolExecutor for SessionTools {
       }
       "shell_start" | "shell_edit" | "shell_poll" | "shell_write" | "shell_kill" => {
         self.execute_shell(call, control).await
+      }
+      "web_search" | "fetch_content" | "get_search_content" => {
+        let Some(app) = self.app.upgrade() else {
+          return ToolOutcome::Failed("application is shutting down".into());
+        };
+        let Some(web) = app.web.clone() else {
+          return ToolOutcome::Failed("web tools are disabled in the configuration".into());
+        };
+        web.execute(call, control).await
+      }
+      "snapshot_checkpoint" | "snapshot_undo" | "snapshot_redo" => {
+        let Some(snapshot) = &self.snapshot else {
+          return ToolOutcome::Failed("workspace snapshots are disabled for this session".into());
+        };
+        snapshot.execute(call, control).await
+      }
+      name if name.starts_with("mcp_") => {
+        let Some(app) = self.app.upgrade() else {
+          return ToolOutcome::Failed("application is shutting down".into());
+        };
+        let rest = &name["mcp_".len()..];
+        let Some((server, tool)) = rest.split_once('_') else {
+          return ToolOutcome::Failed(format!("malformed mcp tool name: {name}"));
+        };
+        let Some(spec) = app.mcp_specs.lock().await.get(server).cloned() else {
+          return ToolOutcome::Failed(format!("unknown mcp server: {server}"));
+        };
+        app.mcp.call_tool(server, tool, call.arguments.clone(), &spec, control).await
       }
       _ => ToolOutcome::Failed(format!("unknown tool: {}", call.name)),
     }
