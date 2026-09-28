@@ -197,3 +197,42 @@ impl crate::executor::tool::ToolExecutor for MemoryRecallTool {
     }
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn temp_store(tag: &str) -> MemoryStore {
+    let path = std::env::temp_dir().join(format!("wish-memory-{tag}-{}.sqlite", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    MemoryStore::open(path).expect("open memory store")
+  }
+
+  #[test]
+  fn observe_reflect_recall_roundtrip() {
+    let store = temp_store("roundtrip");
+    store.observe("session-a", "normal", "user prefers Rust for tooling").unwrap();
+    store.observe("session-a", "warn", "build failed until mingw64 was linked").unwrap();
+    store.observe("session-b", "normal", "deploy script lives in scripts/deploy.ps1").unwrap();
+
+    let hits = store.search("mingw", 10).expect("search");
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0]["kind"], "observation");
+    assert!(hits[0]["content"].as_str().unwrap().contains("mingw64"));
+
+    assert!(store.search("nonexistent-topic", 10).unwrap().is_empty());
+
+    let id = store.reflect("The Windows toolchain needs mingw64 + rust-lld", &["obs-1".into()]).unwrap();
+    assert!(!id.is_empty());
+    assert_eq!(store.reflections(10).first().map(|r| r.content.clone()), Some("The Windows toolchain needs mingw64 + rust-lld".into()));
+    assert_eq!(store.counts(), (3, 1));
+    assert!(store.projection().contains("mingw64 + rust-lld"));
+  }
+
+  #[test]
+  fn empty_store_projects_nothing() {
+    let store = temp_store("empty");
+    assert_eq!(store.projection(), "");
+    assert_eq!(store.counts(), (0, 0));
+  }
+}
