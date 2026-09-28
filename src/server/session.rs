@@ -387,6 +387,21 @@ impl SessionSlot {
       .await
     };
     *self.control.lock().unwrap() = None;
+    // Observational memory: capture one bounded observation per finished run, when enabled.
+    if let Some(app) = self.tools.app_handle() {
+      if let Some(memory) = &app.memory {
+        let priority = match &result {
+          Ok(outcome) => if matches!(outcome, RunOutcome::Completed | RunOutcome::Interrupted) { "normal" } else { "warn" },
+          Err(_) => "warn",
+        };
+        let name = self.descriptor.read().unwrap().name.clone();
+        let detail = match &result {
+          Ok(outcome) => format!("run finished: {outcome:?}"),
+          Err(error) => format!("run failed: {error}"),
+        };
+        let _ = memory.observe(&self.get_descriptor().id, priority, &format!("{name} — {detail}"));
+      }
+    }
     if result.is_err() && !session.get_state().is_stable() {
       let _ = session.settle_interrupted();
     }
