@@ -23,6 +23,8 @@ pub struct SessionTools {
   image_dir: PathBuf,
   /// Workspace snapshots for undo and redo; present when snapshotting is enabled.
   pub snapshot: Option<crate::tool::snapshot::SnapshotTool>,
+  /// Prompt skills loaded from the data directory.
+  pub skills: Option<crate::server::skills::SkillSearchTool>,
 }
 impl SessionTools {
   pub fn new(
@@ -32,6 +34,7 @@ impl SessionTools {
     session_id: String,
     image_dir: PathBuf,
     snapshot: Option<crate::tool::snapshot::SnapshotTool>,
+    skills: Option<crate::server::skills::SkillSearchTool>,
   ) -> Self {
     Self {
       shell,
@@ -41,6 +44,7 @@ impl SessionTools {
       handle: session.create_handle(),
       image_dir,
       snapshot,
+      skills,
     }
   }
   pub fn get_history_specifications(&self) -> Vec<crate::protocol::Tool> {
@@ -202,6 +206,12 @@ impl ToolExecutor for SessionTools {
           return ToolOutcome::Failed("workspace snapshots are disabled for this session".into());
         };
         snapshot.execute(call, control).await
+      }
+      "skill_search" => {
+        let Some(skills) = &self.skills else {
+          return ToolOutcome::Failed("skills are disabled in the configuration".into());
+        };
+        skills.execute(call)
       }
       name if name.starts_with("mcp_") => {
         let Some(app) = self.app.upgrade() else {

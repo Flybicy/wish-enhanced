@@ -137,8 +137,24 @@ impl SessionSlot {
       }
     };
     let tasks = app.upgrade().expect("session application is alive").tasks.clone();
+    let skills = match app.upgrade() {
+      Some(app) => {
+        let (enabled, extra) = {
+          let configuration = app.configuration.lock().await;
+          (configuration.config.skills.enabled, configuration.config.skills.dirs.clone())
+        };
+        if enabled {
+          let mut dirs = vec![app.data_dir.join("skills")];
+          dirs.extend(extra);
+          Some(crate::server::skills::SkillSearchTool::new(dirs))
+        } else {
+          None
+        }
+      }
+      _ => None,
+    };
     let tools =
-      SessionTools::new(shell, &session, app.clone(), descriptor.id.clone(), image_dir.clone(), snapshot_tool);
+      SessionTools::new(shell, &session, app.clone(), descriptor.id.clone(), image_dir.clone(), snapshot_tool, skills);
     let status = Mutex::new(snapshot(&session));
     let (events, _) = broadcast::channel(256);
     Ok(Arc::new(Self {
@@ -177,6 +193,7 @@ impl SessionSlot {
           self.tools.web_enabled()
         }
         "snapshot_checkpoint" | "snapshot_undo" | "snapshot_redo" => self.tools.snapshot.is_some(),
+        "skill_search" => self.tools.skills.is_some(),
         name if name.starts_with("mcp_") => {
           let rest = &name["mcp_".len()..];
           match rest.split_once('_') {
@@ -201,6 +218,9 @@ impl SessionSlot {
     }
     if let Some(snapshot) = &self.tools.snapshot {
       config.tools.extend(snapshot.get_specifications());
+    }
+    if let Some(skills) = &self.tools.skills {
+      config.tools.push(skills.get_specification());
     }
     config.tools.extend(self.tools.mcp_specifications());
     Ok(config)
