@@ -6,22 +6,24 @@
 use std::ffi::c_void;
 use std::net::SocketAddr;
 use std::os::windows::ffi::OsStrExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::OnceLock;
 use std::time::Duration;
 
 use windows_sys::core::{GUID, PCWSTR};
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows_sys::Win32::System::LibraryLoader::{
   GetProcAddress, GetModuleHandleW, LoadLibraryW,
 };
+use windows_sys::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-  CreateWindowExW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DefWindowProcW, DispatchMessageW,
-  GetClientRect, GetMessageW, IDC_ARROW, LoadCursorW, MSG, PostMessageW, PostQuitMessage,
-  RegisterClassW, TranslateMessage, WM_CLOSE, WM_DESTROY, WM_SIZE, WNDCLASSW,
-  WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+  CreateWindowExW, CS_HREDRAW, CS_VREDRAW, DefWindowProcW, DispatchMessageW,
+  GetClientRect, GetMessageW, GetSystemMetrics, GetWindowPlacement, IDC_ARROW, LoadCursorW, MSG,
+  PostMessageW, PostQuitMessage, RegisterClassW, SetWindowPlacement, ShowWindow, SW_SHOW,
+  SM_CXSCREEN, SM_CYSCREEN, TranslateMessage, WINDOWPLACEMENT, WM_CLOSE, WM_DESTROY, WM_SIZE,
+  WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 
 const S_OK: i32 = 0;
@@ -58,6 +60,64 @@ static CONTROLLER_HANDLER: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut
 static READY: AtomicBool = AtomicBool::new(false);
 static FAILURE: OnceLock<String> = OnceLock::new();
 static URL: OnceLock<String> = OnceLock::new();
+static PLACEMENT_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+/// Window geometry remembered between runs, written beside the configuration.
+#[derive(serde::Deserialize, serde::Serialize)]
+struct Placement {
+  flags: u32,
+  show_cmd: u32,
+  min: (i32, i32),
+  max: (i32, i32),
+  normal: (i32, i32, i32, i32),
+}
+
+fn load_placement(path: &Path) -> Option<WINDOWPLACEMENT> {
+  let saved: Placement = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+  log("window: placement restored");
+  Some(WINDOWPLACEMENT {
+    length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+    flags: saved.flags,
+    ptMinPosition: POINT { x: saved.min.0, y: saved.min.1 },
+    ptMaxPosition: POINT { x: saved.max.0, y: saved.max.1 },
+    rcNormalPosition: RECT {
+      left: saved.normal.0,
+      top: saved.normal.1,
+      right: saved.normal.2,
+      bottom: saved.normal.3,
+    },
+    showCmd: saved.show_cmd,
+  })
+}
+
+fn save_placement(path: &Path, hwnd: HWND) {
+  let placement = unsafe {
+    let mut placement: WINDOWPLACEMENT = std::mem::zeroed();
+    placement.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
+    if GetWindowPlacement(hwnd, &mut placement) == 0 {
+      return;
+    }
+    placement
+  };
+  // Never restore into a minimized start; keep restored and maximized only.
+  let show_cmd = if placement.showCmd == 2 { 5 } else { placement.showCmd };
+  let saved = Placement {
+    flags: placement.flags,
+    show_cmd,
+    min: (placement.ptMinPosition.x, placement.ptMinPosition.y),
+    max: (placement.ptMaxPosition.x, placement.ptMaxPosition.y),
+    normal: (
+      placement.rcNormalPosition.left,
+      placement.rcNormalPosition.top,
+      placement.rcNormalPosition.right,
+      placement.rcNormalPosition.bottom,
+    ),
+  };
+  if let Ok(text) = serde_json::to_string_pretty(&saved) {
+    let _ = std::fs::write(path, text);
+    log("window: placement saved");
+  }
+}
 
 /// Open the interface window and block until the user closes it.
 pub(crate) fn run(addr: SocketAddr, profile_dir: Option<PathBuf>) -> Result<(), String> {
@@ -68,7 +128,14 @@ pub(crate) fn run(addr: SocketAddr, profile_dir: Option<PathBuf>) -> Result<(), 
     return Err("no profile directory is available beside the configuration".into());
   };
   std::fs::create_dir_all(&profile_dir).map_err(|error| format!("creating the profile directory failed: {error}"))?;
+  let placement_path = profile_dir
+    .parent()
+    .unwrap_or(&profile_dir)
+    .join("window-placement.json");
+  let _ = PLACEMENT_PATH.set(placement_path);
   unsafe {
+    // Crisp text on scaled displays: the window measures itself in physical pixels.
+    let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     // WebView2 completions arrive on the thread that created the environment.
     CoInitializeEx(std::ptr::null_mut(), COINIT_APARTMENTTHREADED as u32);
     let module = GetModuleHandleW(std::ptr::null());
@@ -88,16 +155,21 @@ pub(crate) fn run(addr: SocketAddr, profile_dir: Option<PathBuf>) -> Result<(), 
     if RegisterClassW(&class) == 0 {
       return Err("registering the window class failed".into());
     }
+    // A first run centers on the primary display; later runs restore saved geometry.
+    let width = 1360;
+    let height = 900;
+    let screen_width = GetSystemMetrics(SM_CXSCREEN).max(width);
+    let screen_height = GetSystemMetrics(SM_CYSCREEN).max(height);
     let title: Vec<u16> = "Wish\0".encode_utf16().collect();
     let window = CreateWindowExW(
       0,
       class.lpszClassName,
       title.as_ptr(),
-      WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-      CW_USEDEFAULT,
-      CW_USEDEFAULT,
-      1360,
-      900,
+      WS_OVERLAPPEDWINDOW,
+      (screen_width - width) / 2,
+      (screen_height - height) / 2,
+      width,
+      height,
       std::ptr::null_mut(),
       std::ptr::null_mut(),
       module,
@@ -107,6 +179,15 @@ pub(crate) fn run(addr: SocketAddr, profile_dir: Option<PathBuf>) -> Result<(), 
       return Err("creating the window failed".into());
     }
     WINDOW.store(window, Ordering::SeqCst);
+    // Remembered geometry, or a sensible first show.
+    match load_placement(PLACEMENT_PATH.get().expect("placement path set")) {
+      Some(mut placement) => {
+        SetWindowPlacement(window, &mut placement);
+      }
+      None => {
+        ShowWindow(window, SW_SHOW);
+      }
+    }
     let loader = load_loader()?;
     log("window: loader found");
     let create_environment = match GetProcAddress(
@@ -175,6 +256,9 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, message: u32, wparam: WPARAM, lpa
       0
     }
     WM_DESTROY => {
+      if let Some(path) = PLACEMENT_PATH.get() {
+        save_placement(path, hwnd);
+      }
       let controller = CONTROLLER.swap(std::ptr::null_mut(), Ordering::SeqCst);
       if !controller.is_null() {
         let close: unsafe extern "system" fn(*mut c_void) -> i32 =
