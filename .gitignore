@@ -2,3 +2,4 @@
 
 # Local linker setup (machine-specific paths)
 /.cargo/
+dist-rehearsal/
