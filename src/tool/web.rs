@@ -464,3 +464,44 @@ fn strip_html(html: &str) -> String {
     .join("\n");
   collapsed
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::net::IpAddr;
+
+  #[test]
+  fn decodes_common_entities() {
+    assert_eq!(decode_entities("a&amp;b&quot;c&#x27;d"), "a&b\"c'd");
+  }
+
+  #[test]
+  fn parses_ddg_result_blocks() {
+    let fixture = r#"<div class="result"><a class="result__a" href="https://example.com/a">First &amp; Foremost</a><a class="result__snippet">alpha snippet</a></div>
+      <a class="result__a" href="/redirect?u=https://example.org/b">Second</a>"#;
+    let results = parse_ddg(fixture, 10);
+    assert_eq!(results.len(), 1, "relative hrefs are skipped");
+    assert_eq!(results[0]["url"], "https://example.com/a");
+    assert_eq!(results[0]["title"], "First & Foremost");
+  }
+
+  #[test]
+  fn strips_scripts_styles_and_tags() {
+    let html = "<style>.x{}</style><script>evil()</script><h1>Title</h1><p>Body text.</p>";
+    let text = strip_html(html);
+    assert!(!text.contains("evil"));
+    assert!(!text.contains(".x"));
+    assert!(text.contains("Title"));
+    assert!(text.contains("Body text."));
+  }
+
+  #[test]
+  fn classifies_private_targets_as_unreachable() {
+    for literal in ["127.0.0.1", "10.0.0.5", "192.168.1.1", "172.16.0.9", "169.254.169.254", "100.64.0.1", "::1", "fd00::5", "fe80::1"] {
+      let ip: IpAddr = literal.parse().unwrap();
+      assert!(classify_ip(&ip).is_some(), "{literal} must be blocked");
+    }
+    let public: IpAddr = "1.1.1.1".parse().unwrap();
+    assert!(classify_ip(&public).is_none());
+  }
+}

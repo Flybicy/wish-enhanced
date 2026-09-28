@@ -30,7 +30,12 @@ impl ShadowRepo {
     command
       .env("GIT_DIR", &self.git_dir)
       .env("GIT_WORK_TREE", &self.work_tree)
-      .args(["-c", "core.autocrlf=false", "-c", "core.fileMode=false"])
+      .args([
+        "-c", "core.autocrlf=false",
+        "-c", "core.fileMode=false",
+        "-c", "user.name=wish snapshot",
+        "-c", "user.email=wish@snapshot.local",
+      ])
       .current_dir(&self.work_tree)
       .kill_on_drop(true);
     command
@@ -50,7 +55,9 @@ impl ShadowRepo {
 
   /// Creates the bare repository if it does not exist yet.
   pub async fn ensure(&self) -> Result<(), ToolOutcome> {
-    if !self.git_dir.exists() {
+    // Initialize when the bare marker is missing, even if the directory already exists
+    // (tests and created-in-advance data directories start empty).
+    if !self.git_dir.join("HEAD").exists() {
       tokio::fs::create_dir_all(&self.git_dir)
         .await
         .map_err(|error| ToolOutcome::Failed(format!("snapshot dir: {error}")))?;
@@ -172,20 +179,22 @@ impl SnapshotTool {
 
   async fn undo(&self) -> ToolOutcome {
     let _guard = self.lock.lock().await;
-    let current = match self.repo.snapshot().await {
-      Ok(commit) => commit,
-      Err(error) => return error,
-    };
-    let Some(target) = self.undo_stack.lock().await.pop() else {
-      return ToolOutcome::Failed("nothing to undo".into());
-    };
+    let mut stack = self.undo_stack.lock().await;
+    if stack.len() < 2 {
+      return ToolOutcome::Failed(
+        "nothing to undo: there is no snapshot before the most recent one".into(),
+      );
+    }
+    let latest = stack.pop().unwrap();
+    let target = stack.last().cloned().unwrap();
+    drop(stack);
     match self.repo.restore_to(&target).await {
       Ok((commit, changed)) => {
-        self.redo_stack.lock().await.push(current);
+        self.redo_stack.lock().await.push(latest);
         ToolOutcome::Success(json!({"restored_to": commit, "files_restored": changed}))
       }
       Err(error) => {
-        self.undo_stack.lock().await.push(target);
+        self.undo_stack.lock().await.push(latest);
         error
       }
     }
@@ -193,16 +202,12 @@ impl SnapshotTool {
 
   async fn redo(&self) -> ToolOutcome {
     let _guard = self.lock.lock().await;
-    let current = match self.repo.snapshot().await {
-      Ok(commit) => commit,
-      Err(error) => return error,
-    };
     let Some(target) = self.redo_stack.lock().await.pop() else {
       return ToolOutcome::Failed("nothing to redo".into());
     };
     match self.repo.restore_to(&target).await {
       Ok((commit, changed)) => {
-        self.undo_stack.lock().await.push(current);
+        self.undo_stack.lock().await.push(target);
         ToolOutcome::Success(json!({"restored_to": commit, "files_restored": changed}))
       }
       Err(error) => {
@@ -238,4 +243,59 @@ pub fn looks_like_project(root: &Path) -> bool {
     .iter()
     .any(|marker| root.join(marker).is_file())
     || root.join(".git").exists()
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn temp_root(tag: &str) -> std::path::PathBuf {
+    let root = std::env::temp_dir().join(format!("wish-snapshot-test-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    root
+  }
+
+  #[tokio::test]
+  async fn snapshot_undo_redo_roundtrip() {
+    let work = temp_root("work");
+    let git = temp_root("git");
+    std::fs::write(work.join("file.txt"), "version one").unwrap();
+    let tool = SnapshotTool::new(work.clone(), git.clone());
+
+    // First checkpoint captures "version one" (ensure initializes the shadow repo).
+    tool.repo.ensure().await.expect("init shadow repo");
+    let first = tool.repo.snapshot().await.expect("first snapshot");
+    assert!(!first.is_empty());
+    tool.undo_stack.lock().await.push(first.clone());
+
+    // Mutate, checkpoint again (pushes onto the undo stack like the tool does), then undo
+    // must bring "version one" back.
+    std::fs::write(work.join("file.txt"), "version two").unwrap();
+    let second = tool.repo.snapshot().await.expect("second snapshot");
+    tool.undo_stack.lock().await.push(second.clone());
+    tool.undo().await;
+
+    let restored = std::fs::read_to_string(work.join("file.txt")).unwrap();
+    assert_eq!(restored, "version one", "undo restores the prior snapshot");
+
+    // Redo must move forward to "version two" again.
+    tool.redo().await;
+    let redone = std::fs::read_to_string(work.join("file.txt")).unwrap();
+    assert_eq!(redone, "version two", "redo reapplies the undone state");
+
+    let _ = std::fs::remove_dir_all(&work);
+    let _ = std::fs::remove_dir_all(&git);
+  }
+
+  #[test]
+  fn project_detection() {
+    let root = std::env::temp_dir().join(format!("wish-detect-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    assert!(!looks_like_project(&root), "empty dir is not a project");
+    std::fs::write(root.join("Cargo.toml"), "[package]").unwrap();
+    assert!(looks_like_project(&root));
+    let _ = std::fs::remove_dir_all(&root);
+  }
 }
