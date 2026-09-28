@@ -88,11 +88,11 @@ jobs:
         with:
           name: wish-installer
           path: |
-            installer/dist/wish-setup-*.exe
+            dist/wish-setup-*.exe
             dist/wish/**
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: installer/dist/wish-setup-*.exe
+          files: dist/wish-setup-*.exe
