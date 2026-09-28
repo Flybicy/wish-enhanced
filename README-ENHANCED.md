@@ -1,5 +1,9 @@
 # Wish Enhanced
 
+> **Fork 声明**：本项目是 [WindustH/wish-core](https://github.com/WindustH/wish-core)（MIT License,
+> Copyright (c) 2026 WindustH）的增强分支。原始引擎代码版权归原作者所有；本仓库的修改以相同
+> MIT 协议发布。LICENSE 文件完整保留了上游版权声明。
+
 Wish 自托管 agent 的增强分支：在 wish-core 单二进制引擎（Rust + axum + SQLite）中原生融合了五个能力模块，
 前端（wish-web，Vue 3）同步升级。Rust 侧无任何新运行时依赖进程——所有能力都是引擎内建工具。
 

@@ -5,6 +5,11 @@
   </picture>
 </p>
 
+> **Fork 声明**：源自 [WindustH/wish-web](https://github.com/WindustH/wish-web)（MIT License,
+> Copyright (c) 2026 WindustH），随 wish-enhanced 增强分支一同分发；修改部分以相同 MIT 协议发布。
+
+<p align="center">
+
 <p align="center">
   <strong>The desktop and mobile app for the Wish AI agent.</strong>
 </p>
