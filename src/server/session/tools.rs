@@ -8,16 +8,16 @@ use crate::{
   session::{Session, SessionHandle},
   tool::{search_history::SearchHistoryTool, shell::ShellTool, view_image::ViewImageTool},
 };
-use serde_json::json;
+use serde_json::{json, Value};
 use std::{
   path::PathBuf,
-  sync::{Weak, atomic::Ordering},
+  sync::{Arc, Weak, atomic::Ordering},
 };
 
 pub struct SessionTools {
   pub shell: Option<ShellTool>,
   history: SearchHistoryTool,
-  app: Weak<App>,
+  pub(crate) app: Weak<App>,
   session_id: String,
   handle: SessionHandle,
   image_dir: PathBuf,
@@ -62,9 +62,16 @@ impl SessionTools {
   pub fn web_specifications(&self) -> Option<Vec<crate::protocol::Tool>> {
     self.app.upgrade().and_then(|app| app.web.clone()).map(|web| web.get_specifications())
   }
+  /// Whether subagent delegation is enabled in the configuration.
+  pub fn subagents_enabled(&self) -> bool {
+    self.app.upgrade().map(|app| app.subagents_enabled).unwrap_or(false)
+  }
+  /// An owning handle to the application, when it is still alive.
+  pub fn app_handle(&self) -> Option<Arc<App>> {
+    self.app.upgrade()
+  }
   /// Whether an MCP server with this ID started successfully.
-  pub fn mcp_registered(&self, server: &str) -> bool {
-    self
+  pub fn mcp_registered(&self, server: &str) -> bool {    self
       .app
       .upgrade()
       .map(|app| {
@@ -223,6 +230,12 @@ impl ToolExecutor for SessionTools {
         };
         memory.execute(call, control).await
       }
+      "subagent" | "subagent_result" => {
+        let Some(app) = self.app.upgrade() else {
+          return ToolOutcome::Failed("application is shutting down".into());
+        };
+        execute_subagent_tool(&app, &self.session_id, call).await
+      }
       name if name.starts_with("mcp_") => {
         let Some(app) = self.app.upgrade() else {
           return ToolOutcome::Failed("application is shutting down".into());
@@ -238,5 +251,69 @@ impl ToolExecutor for SessionTools {
       }
       _ => ToolOutcome::Failed(format!("unknown tool: {}", call.name)),
     }
+  }
+}
+
+/// Executes the subagent and subagent_result tools against the shared manager.
+async fn execute_subagent_tool(
+  app: &Arc<App>,
+  parent_session: &str,
+  call: &ToolCall,
+) -> ToolOutcome {
+  use crate::server::subagents;
+  match call.name.as_str() {
+    "subagent" => {
+      let Some(prompt) = call.arguments.get("prompt").and_then(Value::as_str) else {
+        return ToolOutcome::Failed("prompt is required".into());
+      };
+      let description = call
+        .arguments
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("delegated task");
+      let agent_type = call
+        .arguments
+        .get("agent_type")
+        .and_then(Value::as_str)
+        .unwrap_or("general-purpose");
+      let agent_id = app
+        .subagents
+        .spawn(parent_session.to_owned(), agent_type.to_owned(), prompt.to_owned(), description.to_owned())
+        .await;
+      let launch = subagents::launch(
+        app.clone(),
+        parent_session.to_owned(),
+        agent_id.clone(),
+        agent_type.to_owned(),
+        prompt.to_owned(),
+        description.to_owned(),
+      )
+      .await;
+      match launch {
+        Ok(value) => ToolOutcome::Success(value),
+        Err(error) => {
+          app.subagents.update_status(&agent_id, "failed").await;
+          ToolOutcome::Failed(error)
+        }
+      }
+    }
+    "subagent_result" => {
+      let Some(agent_id) = call.arguments.get("agent_id").and_then(Value::as_str) else {
+        return ToolOutcome::Failed("agent_id is required".into());
+      };
+      match app.subagents.get(agent_id).await {
+        Some(record) => {
+          let value = json!({
+            "agent_id": record.id,
+            "status": record.status,
+            "description": record.description,
+            "agent_type": record.agent_type,
+          });
+          ToolOutcome::Success(value)
+        }
+        None => ToolOutcome::Failed(format!("unknown subagent: {agent_id}")),
+      }
+    }
+    _ => ToolOutcome::Failed(format!("unknown subagent tool: {}", call.name)),
   }
 }

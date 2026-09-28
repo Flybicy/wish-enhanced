@@ -14,6 +14,7 @@ mod provider;
 mod sampling;
 mod session;
 mod skills;
+mod subagents;
 
 pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
   let mut args = std::env::args().skip(1);

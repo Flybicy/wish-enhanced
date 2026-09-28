@@ -199,6 +199,7 @@ impl SessionSlot {
         "snapshot_checkpoint" | "snapshot_undo" | "snapshot_redo" => self.tools.snapshot.is_some(),
         "skill_search" => self.tools.skills.is_some(),
         "memory_recall" => self.tools.memory.is_some(),
+        "subagent" | "subagent_result" => self.tools.subagents_enabled(),
         name if name.starts_with("mcp_") => {
           let rest = &name["mcp_".len()..];
           match rest.split_once('_') {
@@ -229,6 +230,11 @@ impl SessionSlot {
     }
     if let Some(memory) = &self.tools.memory {
       config.tools.push(memory.get_specification());
+    }
+    if self.tools.subagents_enabled() {
+      if let Some(app) = self.tools.app_handle() {
+        config.tools.extend(crate::server::subagents::get_specifications(&app.subagents));
+      }
     }
     config.tools.extend(self.tools.mcp_specifications());
     Ok(config)

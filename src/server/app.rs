@@ -41,6 +41,10 @@ pub struct App {
   pub mcp_specs: Arc<tokio::sync::Mutex<BTreeMap<String, crate::tool::mcp::McpServerSpec>>>,
   /// The observational memory ledger, present when memory is enabled.
   pub memory: Option<Arc<crate::session::memory::MemoryStore>>,
+  /// Subagent delegation pool and registry.
+  pub subagents: Arc<crate::server::subagents::SubagentManager>,
+  /// Whether the configuration enables subagent delegation.
+  pub subagents_enabled: bool,
 }
 impl App {
   pub async fn open(config: &Config, config_path: PathBuf) -> Result<Arc<Self>, ApiError> {
@@ -121,6 +125,11 @@ impl App {
     } else {
       None
     };
+    let subagents = Arc::new(crate::server::subagents::SubagentManager::new(
+      config.subagents.max_concurrent,
+      config.subagents.max_depth,
+    ));
+    let subagents_enabled = config.subagents.enabled;
     let app = Arc::new(Self {
       storage,
       index,
@@ -140,6 +149,8 @@ impl App {
       mcp,
       mcp_specs,
       memory,
+      subagents,
+      subagents_enabled,
     });
     crate::server::codex_login::start_refresh_worker(&app);
     Ok(app)
