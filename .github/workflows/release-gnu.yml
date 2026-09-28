@@ -1,0 +1,44 @@
+# Fallback CI: GNU toolchain with rust-lld self-contained linking (mirrors the local recipe).
+# Only used if the MSVC workflow hits a toolchain edge; not part of the default release path.
+name: release-gnu
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable-gnu)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+
+      - name: Add rust-lld linker config
+        run: |
+          New-Item -ItemType Directory -Force -Path .cargo | Out-Null
+          $lld = "$env:RUSTUP_HOME/toolchains/stable-x86_64-pc-windows-msvc/lib/rustlib/x86_64-pc-windows-msvc/bin/rust-lld.exe"
+          if (-not (Test-Path $lld)) { $lld = "rust-lld" }
+          @"
+          [target.x86_64-pc-windows-gnu]
+          linker = "$lld"
+          rustflags = ["-C", "link-self-contained=y"]
+          "@ | Set-Content .cargo/config.toml
+
+      - name: Build wish-core (release)
+        run: cargo build --release
+        working-directory: wish-core
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wish-gnu
+          path: wish-core/target/release/wish.exe
