@@ -17,6 +17,111 @@ pub struct Config {
   pub proxy: ProxyConfig,
   pub shell: ShellSettings,
   pub defaults: Defaults,
+  /// Model Context Protocol servers launched as child processes, by ID.
+  pub mcp_servers: BTreeMap<String, McpServerConfig>,
+  /// Web search and content fetching tools.
+  pub web: WebSettings,
+  /// Prompt-injection skill files under the data directory.
+  pub skills: SkillsSettings,
+  /// Observational memory (observations and reflections across sessions).
+  pub memory: MemorySettings,
+  /// In-process subagent delegation.
+  pub subagents: SubagentsSettings,
+  /// Workspace snapshotting (shadow git) for undo and redo.
+  pub workspace_history: WorkspaceHistorySettings,
+}
+
+/// One MCP server process: a command, its arguments and optional environment overrides.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct McpServerConfig {
+  pub command: String,
+  pub args: Vec<String>,
+  pub env: BTreeMap<String, String>,
+  /// Seconds before a tool call on this server gives up.
+  pub call_timeout_secs: u64,
+}
+impl Default for McpServerConfig {
+  fn default() -> Self {
+    Self { command: String::new(), args: Vec::new(), env: BTreeMap::new(), call_timeout_secs: 60 }
+  }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WebSettings {
+  pub enabled: bool,
+  /// duckduckgo needs no key; tavily and brave read their key from the named variable.
+  pub provider: WebProvider,
+  /// Seconds a fetch request waits before giving up.
+  pub fetch_timeout_secs: u64,
+}
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WebProvider {
+  DuckDuckGo,
+  Tavily,
+  Brave,
+}
+impl Default for WebSettings {
+  fn default() -> Self {
+    Self { enabled: true, provider: WebProvider::DuckDuckGo, fetch_timeout_secs: 30 }
+  }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SkillsSettings {
+  pub enabled: bool,
+  /// Extra directories holding SKILL.md files, in addition to <data_dir>/skills.
+  pub dirs: Vec<PathBuf>,
+}
+impl Default for SkillsSettings {
+  fn default() -> Self {
+    Self { enabled: true, dirs: Vec::new() }
+  }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MemorySettings {
+  pub enabled: bool,
+  /// Source-entry tokens after which the observer captures an observation.
+  pub observe_after_tokens: u64,
+  /// Source-entry tokens after which the reflector distills reflections.
+  pub reflect_after_tokens: u64,
+  /// Active observation pool target, in tokens, after a successful reflection.
+  pub pool_target_tokens: u64,
+}
+impl Default for MemorySettings {
+  fn default() -> Self {
+    Self { enabled: true, observe_after_tokens: 10_000, reflect_after_tokens: 20_000, pool_target_tokens: 6_000 }
+  }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SubagentsSettings {
+  pub enabled: bool,
+  pub max_concurrent: usize,
+  pub max_depth: usize,
+}
+impl Default for SubagentsSettings {
+  fn default() -> Self {
+    Self { enabled: true, max_concurrent: 10, max_depth: 2 }
+  }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WorkspaceHistorySettings {
+  /// true, false, or "auto": enabled when the working directory looks like a project.
+  pub enabled: String,
+}
+impl Default for WorkspaceHistorySettings {
+  fn default() -> Self {
+    Self { enabled: "auto".into() }
+  }
 }
 
 /// The shell every session's commands run under. Applied to the next command after a save.
@@ -170,6 +275,12 @@ impl Default for Config {
       proxy: ProxyConfig::default(),
       shell: ShellSettings::default(),
       defaults: Defaults::default(),
+      mcp_servers: BTreeMap::new(),
+      web: WebSettings::default(),
+      skills: SkillsSettings::default(),
+      memory: MemorySettings::default(),
+      subagents: SubagentsSettings::default(),
+      workspace_history: WorkspaceHistorySettings::default(),
     }
   }
 }

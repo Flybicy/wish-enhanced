@@ -29,7 +29,7 @@ uuid = { version = "1", features = ["v4"] }
 futures-util = "0.3"
 # HTTP client. `default-features = false` on purpose: rustls instead of system OpenSSL and `stream`
 # for SSE bodies, with no auto-decompression, no HTTP/2 and no platform proxy detection until asked.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 # AWS SigV4 request signing: the digests, and the HMAC-SHA256 chain a signature is made of.
 sha2 = "0.10"
 hmac = "0.12"

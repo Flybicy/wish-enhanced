@@ -1,1 +1,2 @@
 /target
+\n# Local linker setup (machine-specific paths)\n/.cargo/

@@ -16,6 +16,9 @@ pub(super) use windows::ProcessTree;
 pub(super) fn default_program() -> PathBuf {
   #[cfg(windows)]
   {
+    if let Some(niu) = niubash_program() {
+      return niu;
+    }
     std::env::var_os("COMSPEC").map(PathBuf::from).unwrap_or_else(|| "cmd.exe".into())
   }
   #[cfg(not(windows))]
@@ -26,7 +29,14 @@ pub(super) fn default_program() -> PathBuf {
 pub(super) fn default_args() -> Vec<String> {
   #[cfg(windows)]
   {
-    vec!["/D".into(), "/S".into(), "/C".into()]
+    if matches!(
+      default_program().file_stem().map(|name| name.to_string_lossy().to_ascii_lowercase()).as_deref(),
+      Some("niu") | Some("niubash")
+    ) {
+      vec!["-c".into()]
+    } else {
+      vec!["/D".into(), "/S".into(), "/C".into()]
+    }
   }
   #[cfg(not(windows))]
   {
@@ -43,6 +53,7 @@ pub(super) fn family_args(program: &Path) -> Vec<String> {
     "fish" => &["-l", "-c"],
     "pwsh" | "powershell" => &["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"],
     "cmd" => &["/D", "/S", "/C"],
+    "niu" | "niubash" => &["-c"],
     _ => &["-c"],
   };
   args.iter().map(|arg| (*arg).to_owned()).collect()
@@ -50,9 +61,9 @@ pub(super) fn family_args(program: &Path) -> Vec<String> {
 /// The first match on `PATH` for each shell name this platform commonly has.
 pub(super) fn installed_shells() -> Vec<PathBuf> {
   #[cfg(windows)]
-  let names = ["pwsh.exe", "powershell.exe", "cmd.exe"].as_slice();
+  let names = ["niu.exe", "niubash.exe", "pwsh.exe", "powershell.exe", "cmd.exe"].as_slice();
   #[cfg(not(windows))]
-  let names = ["zsh", "bash", "fish", "sh", "dash", "ksh", "nu", "pwsh"].as_slice();
+  let names = ["niu", "niubash", "zsh", "bash", "fish", "sh", "dash", "ksh", "nu", "pwsh"].as_slice();
   let Some(path) = std::env::var_os("PATH") else {
     return Vec::new();
   };
@@ -127,4 +138,26 @@ impl ProcessTree {
 // Kept here so all platform constructors report a missing child handle consistently.
 pub(super) fn missing_process() -> io::Error {
   io::Error::other("spawned child has no process handle")
+}
+
+/// Locates a bundled or PATH-installed niubash executable. The installer places niu.exe in a
+/// `niubash` subdirectory next to wish.exe and adds it to PATH; wish prefers it as the Windows
+/// default shell because it understands Unix command syntax natively.
+fn niubash_program() -> Option<PathBuf> {
+  let exe = std::env::current_exe().ok()?;
+  let parent = exe.parent()?;
+  let alongside = parent.join("niubash").join("niu.exe");
+  if is_executable_file(&alongside) {
+    return Some(alongside);
+  }
+  let sibling = parent.join("niu.exe");
+  if is_executable_file(&sibling) {
+    return Some(sibling);
+  }
+  installed_shells().into_iter().find(|path| {
+    matches!(
+      path.file_stem().map(|name| name.to_string_lossy().to_ascii_lowercase()).as_deref(),
+      Some("niu") | Some("niubash")
+    )
+  })
 }

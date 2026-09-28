@@ -1,0 +1,92 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable-msvc)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: wish-win-msvc-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build wish-core (release)
+        run: cargo build --release
+        working-directory: wish-core
+
+      - name: Build wish-web
+        run: |
+          $pnpmVersion = (Get-Content wish-web/package.json | ConvertFrom-Json).packageManager
+          npm i -g pnpm@12
+          pnpm --version
+          cd wish-web
+          pnpm install --frozen-lockfile
+          pnpm run build
+
+      - name: Download niubash release binaries
+        run: |
+          $api = Invoke-RestMethod "https://api.github.com/repos/unixwin/niubash/releases/latest"
+          $asset = $api.assets | Where-Object { $_.name -match "x86_64.*\.zip$" -or $_.name -match "x64.*\.zip$" } | Select-Object -First 1
+          if ($asset) {
+            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "$env:TEMP\niubash.zip"
+            Expand-Archive "$env:TEMP\niubash.zip" -DestinationPath "$env:TEMP\niubash"
+            New-Item -ItemType Directory -Force -Path dist/niubash | Out-Null
+            Copy-Item "$env:TEMP\niubash/*" dist/niubash -Recurse -Force
+          } else {
+            Write-Host "::warning::no niubash x64 asset found; building from source"
+            git clone --depth 1 https://github.com/unixwin/niubash.git niubash-src
+            cargo build --release
+            New-Item -ItemType Directory -Force -Path dist/niubash | Out-Null
+            Copy-Item "niubash-src/target/release/*.exe" dist/niubash -ErrorAction SilentlyContinue
+          }
+
+      - name: Assemble distribution
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/wish | Out-Null
+          Copy-Item wish-core/target/release/wish.exe dist/wish/
+          Copy-Item -Recurse wish-web/dist dist/wish/web
+          # keep the layout the platform.rs helper expects: niubash/niu.exe beside wish.exe
+          if (Test-Path dist/niubash/niu.exe) {
+            Move-Item dist/niubash dist/wish/niubash -Force
+          }
+
+      - name: Build installer (Inno Setup)
+        uses: Minionguyjpro/Inno-Setup-Action@v1.2
+        with:
+          path: installer/wish.iss
+          options: /Odist
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wish-installer
+          path: |
+            dist/*.exe
+            dist/wish/**
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.exe
