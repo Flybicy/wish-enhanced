@@ -12,6 +12,8 @@ import { useMedia } from '../../ui/composables/useMedia.ts';
 import SessionList from './SessionList.vue';
 import SessionListToggle from './SessionListToggle.vue';
 import WorkspaceRail from './WorkspaceRail.vue';
+import AskContext from './AskContext.vue';
+import WorkspaceRailToggle from './WorkspaceRailToggle.vue';
 import { prefs } from '../../core/state/prefsSlice.ts';
 import { applySavedListWidth, cancelListResize, onListResizePointerDown } from './listWidth.ts';
 import { i18n } from '../../core/i18n/index.ts';
@@ -47,6 +49,13 @@ onBeforeUnmount(cancelListResize);
         <KeepAlive include="StartChat"><component :is="Component" /></KeepAlive>
       </RouterView>
     </div>
-    <WorkspaceRail v-if="showRail" :session-id="railSessionId" />
+    <div v-if="!isMobile && railSessionId" class="workspace-rail-edge">
+      <WorkspaceRailToggle />
+    </div>
+    <WorkspaceRail v-if="showRail" :session-id="railSessionId" @close="prefs.setWorkspaceRail(false)">
+      <template #note>
+        <AskContext :session-id="railSessionId" :hidden="false" external-input />
+      </template>
+    </WorkspaceRail>
   </div>
 </template>

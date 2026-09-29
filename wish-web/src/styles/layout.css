@@ -1,7 +1,7 @@
 .shell { display: flex; height: 100dvh; overflow: hidden; }
 .vbar {
   width: var(--w-sidebar); flex: none; display: flex; flex-direction: column; align-items: center;
-  padding: 10px 0 8px; gap: 4px; border-right: 1px solid var(--line); background: var(--rail-bg); z-index: 20;
+  padding: 10px 0 8px; gap: 4px; background: var(--rail-bg); z-index: 20;
 }
 .vbar .spacer { flex: 1; }
 .nav-btn {
@@ -16,12 +16,12 @@
 .nav-btn.active::before { content: ''; position: absolute; left: calc((34px - var(--w-sidebar)) / 2); height: 18px; width: 2px; background: var(--accent); }
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .main-col { position: relative; flex: 1; display: flex; min-width: 0; min-height: 0; overflow: hidden; }
-.sessions-split { flex: 1; display: flex; min-width: 0; min-height: 0; }
+.sessions-split { flex: 1; display: flex; gap: 10px; min-width: 0; min-height: 0; padding: 10px; background: var(--bg-sunken); }
 .sessions-pane {
-  width: var(--w-list); flex: none; border-right: 1px solid var(--line); display: flex;
+  width: var(--w-list); flex: none; display: flex; border-radius: 14px; overflow: hidden;
   flex-direction: column; background: var(--bg-sunken); min-height: 0;
 }
-.content-pane { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.content-pane { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-radius: 14px; background: var(--bg); }
 .shell.mobile { flex-direction: column; }
 .shell.mobile .vbar { display: none; }
 .shell.mobile .sessions-pane { width: 100%; flex: 1; border-right: 0; }
@@ -69,3 +69,21 @@ html.resizing, html.resizing * { cursor: col-resize !important; user-select: non
 html.resizing .shell .sessions-pane { transition: none; }
 .session-list-toggle svg { transition: transform var(--dur) var(--ease-out); }
 .session-list-toggle[aria-expanded="false"] svg { transform: rotate(180deg); }
+
+/* The workspace rail mirrors the session list: a bookmark tab on the edge,
+   pointing into the rail while it is open and back into the conversation
+   once it is closed, so a collapsed rail can always be reopened. */
+.workspace-rail-edge { position: relative; width: 0; flex: none; z-index: 25; }
+.workspace-rail-toggle { position: absolute; top: 50%; left: 0; transform: translateY(-50%); display: grid; place-items: center; width: 24px; height: 56px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--edge-icon, var(--fg-subtle)); cursor: pointer; transition: color var(--dur-fast); }
+.workspace-rail-toggle::before { content: ''; position: absolute; inset: 0 0 0 12px; background: var(--edge-tab, var(--bg-hover)); clip-path: path("M 12 0 C 12 10 0 10 0 20 L 0 36 C 0 46 12 46 12 56 Z"); transform: scaleX(-1); transition: background var(--dur-fast); }
+.workspace-rail-toggle svg { position: relative; justify-self: start; margin-left: 1px; }
+@media (hover: hover) {
+  .workspace-rail-toggle:hover { color: var(--edge-icon, var(--fg)); }
+  .workspace-rail-toggle:hover::before { background: var(--edge-tab, var(--bg-active)); }
+}
+.workspace-rail-toggle[aria-expanded="false"] { left: auto; right: 0; }
+.workspace-rail-toggle[aria-expanded="false"]::before { inset: 0 12px 0 0; transform: none; }
+.workspace-rail-toggle[aria-expanded="false"] svg { justify-self: end; margin: 0 1px 0 0; }
+.workspace-rail-edge:has(.workspace-rail-toggle:hover) { --edge-tab: var(--bg-active); --edge-icon: var(--fg); }
+
+.shell.desktop .workspace-rail { transition: width var(--dur) var(--ease-out), opacity var(--dur) var(--ease-out); }

@@ -5,6 +5,7 @@ mod manage;
 mod providers;
 mod sessions;
 mod statistics;
+mod workspace;
 use crate::server::{app::App, error::ApiError};
 use axum::{
   Json, Router,
@@ -34,6 +35,7 @@ pub fn build_router(app: Arc<App>) -> Router {
     .route("/sessions/{id}/blobs/{blob}", get(content::download))
     .route("/sessions/{id}/blobs/{blob}/meta", get(content::metadata))
     .route("/sessions/{id}/history", get(content::timeline))
+    .route("/sessions/{id}/workspace", get(workspace::list))
     .route("/config", get(manage::configuration).put(manage::save_configuration))
     .route("/proxy-environment", get(|| async { Json(crate::server::config::proxy_environment()) }))
     .route("/shells", get(|| async { Json(crate::server::config::shell_catalog()) }))

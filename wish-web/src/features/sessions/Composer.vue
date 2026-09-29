@@ -303,7 +303,7 @@ const { startComposerDrag, resizeKeys } = useComposerDrag(sizing, height);
         @click="pickAttachment('image', $event)"><Icon name="image" /></button></Hint>
       <Hint :text="i18n.t('chat.attach')"><button class="btn ghost icon-only" :aria-label="i18n.t('chat.attach')"
         @click="pickAttachment('file', $event)"><Icon name="paperclip" /></button></Hint>
-      <button v-if="!start" ref="btwButton" type="button" class="btn ghost composer-btw" :aria-label="i18n.locale.value==='zh'?'BTW · 临时对话':'BTW · Temporary chat'" :aria-expanded="btwOpen" aria-haspopup="dialog" aria-controls="btw-bubble" @click="toggleBtw">BTW</button>
+      <button v-if="!start && mobile" ref="btwButton" type="button" class="btn ghost composer-btw" :aria-label="i18n.locale.value==='zh'?'BTW · 临时对话':'BTW · Temporary chat'" :aria-expanded="btwOpen" aria-haspopup="dialog" aria-controls="btw-bubble" @click="toggleBtw">BTW</button>
       <slot name="selection" />
       <div class="grow" />
     </div>
@@ -327,7 +327,7 @@ const { startComposerDrag, resizeKeys } = useComposerDrag(sizing, height);
         :aria-label="i18n.t('chat.image')" @click="pickAttachment('image', $event)"><Icon name="image" /></button></Hint>
       <Hint v-if="!btwMode" :text="i18n.t('chat.attach')"><button class="btn ghost icon-only"
         :aria-label="i18n.t('chat.attach')" @click="pickAttachment('file', $event)"><Icon name="paperclip" /></button></Hint>
-      <button v-if="!start" ref="btwButton" type="button" class="btn ghost composer-btw" :aria-label="i18n.locale.value==='zh'?'BTW · 临时对话':'BTW · Temporary chat'" :aria-expanded="btwOpen" aria-haspopup="dialog" aria-controls="btw-bubble" @click="toggleBtw">BTW</button>
+      <button v-if="!start && mobile" ref="btwButton" type="button" class="btn ghost composer-btw" :aria-label="i18n.locale.value==='zh'?'BTW · 临时对话':'BTW · Temporary chat'" :aria-expanded="btwOpen" aria-haspopup="dialog" aria-controls="btw-bubble" @click="toggleBtw">BTW</button>
       <div v-if="start" class="composer-start-selection"><slot name="selection" /></div>
       <div v-else class="grow" />
     </div>

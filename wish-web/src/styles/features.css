@@ -57,7 +57,7 @@
 .sl-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 20px 12px; }
 /* Conversation: a bounded reading column inside an independently scrolling viewport. */
 .chat-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.chatbar { height: var(--h-topbar); flex: none; display: flex; align-items: center; gap: 8px; padding: 0 20px; border-bottom: 1px solid var(--line); background: var(--chatbar-bg); }
+.chatbar { height: var(--h-topbar); flex: none; display: flex; align-items: center; gap: 8px; padding: 0 20px; background: var(--chatbar-bg); }
 .chat-title { display: flex; align-items: center; gap: 14px; flex: 1; min-width: 0; }
 .chat-title .name { font: 600 19px/1.4 var(--display); overflow: hidden; text-overflow: clip; white-space: nowrap; }
 .model-selection { display: inline-flex; align-items: center; min-width: 0; max-width: 65%; flex-shrink: 0; gap: 1px; border-radius: 6px; transition: background var(--dur-fast); }
@@ -166,7 +166,7 @@
 .queue-dock-enter-from,.queue-dock-leave-to{opacity:0;transform:translateY(6px)}
 @media(prefers-reduced-motion:reduce){.queue-row-move,.queue-row-enter-active,.queue-row-leave-active,.queue-dock-enter-active,.queue-dock-leave-active{transition:none}}
 @media(max-width:899px){.queue-dock{left:12px;right:auto;margin-inline:0;min-width:min(220px,calc(100% - 24px));max-width:min(var(--mobile-content-width),calc(100% - 24px));bottom:6px}.queue-dock.collapsed{left:12px;min-width:40px}.queue-item .btn.icon-only{width:36px;height:36px;min-height:36px}.queue-item{min-height:38px;gap:3px}.queue-position{width:12px}}
-.composer { position: relative; flex: none; min-height: 0; border-top: 1px solid var(--line-strong); background: var(--bg-raised); display: flex; flex-direction: column; }
+.composer { position: relative; flex: none; min-height: 0; background: var(--bg-raised); display: flex; flex-direction: column; }
 .composer.desktop { --composer-send-clearance: 8px; padding: 0 24px 12px; transition: height var(--dur-fast) var(--ease-out); }
 /* The desktop composer floats as a card above the conversation — hanako's
    composer never glues itself to the window edge. The log column plus breathing

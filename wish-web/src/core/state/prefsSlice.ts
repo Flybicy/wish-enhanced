@@ -12,9 +12,12 @@ export const prefs = (() => {
   // The right workspace rail is on by default: a wide window reads better with
   // the workspace in view, and the toggle remembers the choice either way.
   const workspaceRail = shallowRef(true);
+  // The rail's note panel starts closed: it is a place to jot an aside, not a
+  // panel that should claim space before it is wanted.
+  const btwRail = shallowRef(false);
   const loaded = shallowRef(false);
 
-  const KEYS = { sendOnEnter: 'pref.sendOnEnter', keepAwake: 'pref.keepAwake', showAdvanced: 'pref.showAdvanced', notifyOnFailure: 'pref.notifyOnFailure', sessionListCollapsed: 'pref.sessionListCollapsed', workspaceRail: 'pref.workspaceRail' };
+  const KEYS = { sendOnEnter: 'pref.sendOnEnter', keepAwake: 'pref.keepAwake', showAdvanced: 'pref.showAdvanced', notifyOnFailure: 'pref.notifyOnFailure', sessionListCollapsed: 'pref.sessionListCollapsed', workspaceRail: 'pref.workspaceRail', btwRail: 'pref.btwRail' };
 
   function load() {
     const s = platform('storage');
@@ -32,7 +35,7 @@ export const prefs = (() => {
   }
 
   return {
-    sendOnEnter, keepAwake, showAdvanced, notifyOnFailure, sessionListCollapsed, workspaceRail, loaded,
+    sendOnEnter, keepAwake, showAdvanced, notifyOnFailure, sessionListCollapsed, workspaceRail, btwRail, loaded,
     load,
     setSendOnEnter(v: boolean) { sendOnEnter.value = v; persist(KEYS.sendOnEnter, sendOnEnter); },
     setKeepAwake(v: boolean) { keepAwake.value = v; persist(KEYS.keepAwake, keepAwake); },
@@ -40,6 +43,7 @@ export const prefs = (() => {
     setNotifyOnFailure(v: boolean) { notifyOnFailure.value = v; persist(KEYS.notifyOnFailure, notifyOnFailure); },
     setSessionListCollapsed(v: boolean) { sessionListCollapsed.value = v; persist(KEYS.sessionListCollapsed, sessionListCollapsed); },
     setWorkspaceRail(v: boolean) { workspaceRail.value = v; persist(KEYS.workspaceRail, workspaceRail); },
+    setBtwRail(v: boolean) { btwRail.value = v; persist(KEYS.btwRail, btwRail); },
   };
 })();
 export type PrefsApi = typeof prefs;

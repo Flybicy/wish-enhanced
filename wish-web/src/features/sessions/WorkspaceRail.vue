@@ -1,19 +1,21 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import WorkspaceTree from './WorkspaceTree.vue';
 import { get } from '../../core/api/client.ts';
 import { chat } from '../../core/state/chatSlice.ts';
+import { prefs } from '../../core/state/prefsSlice.ts';
 import { tr } from '../../core/i18n/tr.ts';
 import Icon from '../../ui/components/Icon.vue';
 
-// The right rail answers the question the session list cannot: where does this
-// conversation actually live, and how heavy has it become? Workspace first,
-// because wish organizes by working directory rather than by project object.
+// The desk beside the conversation: the shelf of files at the top, the loose
+// note taped along the bottom, and a ruler of numbers under it. Only what can
+// be acted on lives here — the note takes writing, the file tree takes opening,
+// and the foot reports meters. Capability flags are deliberately absent: they
+// are read-only, so the model is told them and the reader is not shown them.
 const props = defineProps<{ sessionId: string }>();
 
 const snapshot = computed(() => chat.snapshot.value);
 const usage = ref<any>(null);
-const config = ref<any>(null);
 
 const cwd = computed(() => (snapshot.value?.descriptor as any)?.cwd ?? '');
 const folderName = computed(() => {
@@ -21,156 +23,119 @@ const folderName = computed(() => {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 });
 
-interface Row { key: string; label: string; value: string; mono?: boolean; on?: boolean | null }
-const rows = computed<Row[]>(() => {
-  const items: Row[] = [];
-  const model = snapshot.value?.model ?? '';
-  if (model) items.push({ key: 'model', label: tr('模型', 'Model'), value: model, mono: true });
-  const totals = usage.value?.statistics?.totals?.tokens;
-  if (totals) {
-    items.push({ key: 'tokens-in', label: tr('输入 Token', 'Input tokens'), value: String(totals.input_tokens ?? 0), mono: true });
-    items.push({ key: 'tokens-out', label: tr('输出 Token', 'Output tokens'), value: String(totals.output_tokens ?? 0), mono: true });
-    if (totals.reasoning_tokens) items.push({ key: 'tokens-reason', label: tr('其中推理', 'Reasoning'), value: String(totals.reasoning_tokens), mono: true });
-  }
-  const stats = usage.value?.statistics;
-  if (stats) items.push({ key: 'calls', label: tr('模型调用', 'Model calls'), value: String(stats.model_attempts ?? 0), mono: true });
-  return items;
-});
-
-// Capability switches come from the running configuration, so the rail doubles
-// as a truthful status board next to the (session-scoped) capabilities pane.
-const switches = computed(() => {
-  const c = config.value?.config;
-  if (!c) return [] as { key: string; label: string; on: boolean }[];
-  return [
-    { key: 'web', label: tr('Web 检索', 'Web access'), on: !!c.web?.enabled },
-    { key: 'skills', label: tr('技能库', 'Skills'), on: !!c.skills?.enabled },
-    { key: 'memory', label: tr('观察式记忆', 'Memory'), on: !!c.memory?.enabled },
-    { key: 'subagents', label: tr('子代理', 'Subagents'), on: !!c.subagents?.enabled },
-  ];
+const stats = computed(() => {
+  const s = usage.value?.statistics;
+  const totals = s?.totals?.tokens;
+  const cache = s?.totals?.cache;
+  const read = cache?.read_input_tokens ?? 0;
+  const input = totals?.input_tokens ?? 0;
+  return {
+    calls: s?.model_attempts ?? 0,
+    input: input,
+    output: totals?.output_tokens ?? 0,
+    reasoning: totals?.reasoning_tokens ?? 0,
+    cacheHit: read + input > 0 ? Math.round((read / (read + input)) * 100) : null,
+  };
 });
 
 async function load(id: string) {
   if (!id) return;
-  try {
-    const [usageData, configData] = await Promise.all([
-      get('/sessions/' + encodeURIComponent(id) + '/usage'),
-      get('/config'),
-    ]);
-    usage.value = usageData;
-    config.value = configData;
-  } catch {
-    // A rail is a convenience; a missing endpoint must never break the pane.
-  }
+  try { usage.value = await get('/sessions/' + encodeURIComponent(id) + '/usage'); }
+  catch { /* the rail is a convenience; a missing endpoint must not break the pane */ }
 }
-
 watch(() => props.sessionId, load, { immediate: true });
 
-const router = useRouter();
-const copyState = ref('');
+const copying = ref('');
 async function copyPath() {
-  try {
-    await navigator.clipboard.writeText(cwd.value);
-    copyState.value = tr('已复制', 'Copied');
-  } catch {
-    copyState.value = tr('复制失败', 'Copy failed');
-  }
-  setTimeout(() => { copyState.value = ''; }, 1600);
+  try { await navigator.clipboard.writeText(cwd.value); copying.value = tr('已复制', 'Copied'); }
+  catch { copying.value = tr('失败', 'Failed'); }
+  setTimeout(() => { copying.value = ''; }, 1400);
 }
-const openCapabilities = () => router.push({ name: 'chat-capabilities', params: { id: props.sessionId } });
-const openInfo = () => router.push({ name: 'chat-info', params: { id: props.sessionId } });
+
+// 笺 — the note taped along the rail's foot, opened on demand.
+const noteOpen = ref(prefs.btwRail.value);
+watch(noteOpen, value => prefs.setBtwRail(value));
 </script>
 
 <template>
-  <aside class="workspace-rail" :aria-label="tr('工作区', 'Workspace')">
-    <header class="rail-head">
-      <h2>{{ tr('工作区', 'Workspace') }}</h2>
-    </header>
-
-    <section class="rail-section">
+  <aside id="workspace-rail" class="workspace-rail" :aria-label="tr('工作区', 'Workspace')">
+    <div class="rail-card rail-files">
       <button class="rail-path" type="button" :title="cwd" @click="copyPath">
         <Icon name="folder" />
         <span class="rail-path-text">
           <strong>{{ folderName || tr('未设置目录', 'No directory') }}</strong>
-          <small>{{ cwd || tr('这个会话还没有工作目录', 'This session has no working directory yet') }}</small>
+          <small>{{ cwd }}</small>
         </span>
-        <span class="rail-path-hint">{{ copyState || tr('复制', 'Copy') }}</span>
+        <span class="rail-path-hint">{{ copying || tr('复制', 'Copy') }}</span>
       </button>
+      <WorkspaceTree :session-id="sessionId" />
+    </div>
+
+    <section class="rail-card rail-note" :class="{ open: noteOpen }">
+      <button type="button" class="note-head" :aria-expanded="noteOpen" @click="noteOpen = !noteOpen">
+        <Icon :name="noteOpen ? 'chevron-down' : 'chevron-up'" />
+        <span>{{ tr('笺', 'Note') }}</span>
+        <small>{{ tr('侧问 · 不打断主线', 'Aside · keeps the thread') }}</small>
+      </button>
+      <div v-show="noteOpen" class="note-body">
+        <slot name="note" />
+      </div>
     </section>
 
-    <section v-if="rows.length" class="rail-section">
-      <h3>{{ tr('本会话计量', 'This session') }}</h3>
-      <dl class="rail-stats">
-        <div v-for="row in rows" :key="row.key" class="rail-stat">
-          <dt>{{ row.label }}</dt>
-          <dd :class="{ mono: row.mono }">{{ row.value }}</dd>
-        </div>
-      </dl>
-    </section>
-
-    <section v-if="switches.length" class="rail-section">
-      <h3>{{ tr('能力', 'Capabilities') }}</h3>
-      <ul class="rail-list">
-        <li v-for="item in switches" :key="item.key" :class="{ 'is-on': item.on }">
-          <span class="dot" aria-hidden="true" />
-          <span>{{ item.label }}</span>
-          <span class="rail-state">{{ item.on ? tr('已启用', 'on') : tr('已关闭', 'off') }}</span>
-        </li>
-      </ul>
-      <button class="rail-link" type="button" @click="openCapabilities">
-        <span>{{ tr('打开能力面板', 'Open capabilities') }}</span>
-        <Icon name="chevron-right" />
-      </button>
-    </section>
-
-    <section class="rail-section">
-      <h3>{{ tr('会话', 'Session') }}</h3>
-      <ul class="rail-list">
-        <li><span class="dot" aria-hidden="true" /><span>{{ tr('Shell', 'Shell') }}</span><span class="rail-state">{{ snapshot?.descriptor?.shell ? tr('自有', 'own') : tr('跟随全局', 'global') }}</span></li>
-      </ul>
-      <button class="rail-link" type="button" @click="openInfo">
-        <span>{{ tr('会话详情', 'Session details') }}</span>
-        <Icon name="chevron-right" />
-      </button>
-    </section>
+    <p class="rail-foot" :title="tr('模型调用与 token 计量', 'Model calls and token meters')">
+      <span>{{ stats.calls }} {{ tr('次调用', 'calls') }}</span>
+      <span class="sep">·</span>
+      <span>{{ (stats.input / 1000).toFixed(1) }}k in</span>
+      <span class="sep">·</span>
+      <span>{{ (stats.output / 1000).toFixed(1) }}k out</span>
+      <template v-if="stats.cacheHit !== null">
+        <span class="sep">·</span>
+        <span :class="{ good: stats.cacheHit >= 50 }">{{ tr('缓存命中', 'cache') }} {{ stats.cacheHit }}%</span>
+      </template>
+    </p>
   </aside>
 </template>
 
 <style scoped>
+/* hanako rules apply here: regions are cards on paper, told apart by tone and
+   breathing room rather than by ruled lines. */
 .workspace-rail {
-  width: 268px; flex: none; display: flex; flex-direction: column; gap: 18px;
-  padding: 16px 14px 20px; overflow-y: auto; min-height: 0;
-  border-left: 1px solid var(--line); background: var(--bg-sunken);
+  width: 292px; flex: none; display: flex; flex-direction: column; gap: 10px;
+  min-height: 0; padding: 12px 12px 0; background: var(--bg-sunken);
 }
-.rail-head h2 { margin: 0; font: 600 13px/1.4 var(--font); letter-spacing: .08em; text-transform: uppercase; color: var(--fg-subtle); }
-.rail-section { display: flex; flex-direction: column; gap: 8px; }
-.rail-section h3 { margin: 0; font: 600 11px/1.4 var(--font); letter-spacing: .1em; text-transform: uppercase; color: var(--fg-faint); }
+.rail-card {
+  border-radius: 14px; background: var(--bg-raised);
+  box-shadow: 0 1px 2px rgb(31 35 28 / 4%);
+  display: flex; flex-direction: column; min-height: 0;
+}
+html[data-theme='dark'] .rail-card { box-shadow: 0 1px 2px rgb(0 0 0 / 18%); }
+.rail-files { flex: 1; overflow: hidden; padding: 8px; }
 .rail-path {
-  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; cursor: pointer;
-  padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-raised);
-  color: inherit; transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; cursor: pointer;
+  padding: 8px 9px; border: 0; border-radius: 10px; background: none; color: inherit;
+  transition: background var(--dur-fast) var(--ease-out);
 }
-@media (hover: hover) { .rail-path:hover { border-color: var(--line-strong); background: var(--bg-hover); } }
-.rail-path .icon { width: 16px; height: 16px; flex: none; color: var(--accent); }
-.rail-path-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-.rail-path-text strong { font-size: 13px; font-weight: 600; color: var(--fg); }
-.rail-path-text small { font-size: 11px; color: var(--fg-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
-.rail-path-hint { flex: none; font-size: 10px; letter-spacing: .06em; color: var(--fg-faint); text-transform: uppercase; }
-.rail-stats { margin: 0; display: flex; flex-direction: column; gap: 6px; }
-.rail-stat { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-.rail-stat dt { font-size: 12px; color: var(--fg-muted); }
-.rail-stat dd { margin: 0; font-size: 12px; color: var(--fg); }
-.rail-stat dd.mono { font-family: var(--mono); font-size: 11.5px; }
-.rail-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.rail-list li { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fg-muted); }
-.rail-list li .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--fg-faint); }
-.rail-list li.is-on .dot { background: var(--ok); box-shadow: var(--glow-on); }
-.rail-state { margin-left: auto; font-size: 11px; color: var(--fg-faint); }
-.rail-link {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; cursor: pointer;
-  padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: none; color: var(--fg-muted);
-  font-size: 12px; transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+@media (hover: hover) { .rail-path:hover { background: var(--bg-hover); } }
+.rail-path .icon { width: 15px; height: 15px; flex: none; color: var(--accent); }
+.rail-path-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.rail-path-text strong { font-size: 12.5px; font-weight: 600; color: var(--fg); }
+.rail-path-text small { font-size: 10.5px; color: var(--fg-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.rail-path-hint { flex: none; font-size: 10px; letter-spacing: .05em; color: var(--fg-faint); }
+.rail-files > :deep(.ws-tree) { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 2px 6px; }
+.rail-note { flex: none; overflow: hidden; }
+.note-head {
+  display: flex; align-items: center; gap: 8px; width: 100%; cursor: pointer;
+  padding: 10px 12px; border: 0; background: none; color: var(--fg-muted); font: 600 12px/1.4 var(--font);
 }
-@media (hover: hover) { .rail-link:hover { border-color: var(--accent); color: var(--accent); } }
-.rail-link .icon { width: 14px; height: 14px; }
+@media (hover: hover) { .note-head:hover { color: var(--fg); } }
+.note-head .icon { width: 14px; height: 14px; color: var(--accent); }
+.note-head small { margin-left: auto; font-weight: 400; font-size: 10.5px; color: var(--fg-faint); }
+.note-body { max-height: 44vh; overflow-y: auto; padding: 0 12px 12px; }
+.rail-foot {
+  flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin: 0 0 10px;
+  padding: 8px 12px; border-radius: 12px; background: var(--bg-raised);
+  font: 400 10.5px/1.5 var(--mono); color: var(--fg-faint);
+}
+.rail-foot .sep { opacity: .45; }
+.rail-foot .good { color: var(--ok); }
 </style>
