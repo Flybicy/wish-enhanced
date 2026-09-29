@@ -29,8 +29,33 @@ export function useSlashPalette(params: {
   // edit differs from that parked value and lets the palette open again.
   const dismissed = ref<string | null>(null);
 
-  // The query is whatever follows the leading "/", so "/comp" filters to compact.
-  const query = computed(() => (params.text.value.startsWith('/') ? params.text.value.slice(1) : ''));
+  // Two shapes share the "/" trigger. Without a space it is command selection and
+  // the token after "/" filters the list. With a space it is an argument-capturing
+  // command like "/goal <objective>", which stays open so Enter commits the argument.
+  const ARG_COMMANDS = ['goal'];
+  const parsed = computed(() => {
+    const m = /^\/(\S*)(\s+([\s\S]*))?$/.exec(params.text.value);
+    if (!m) return null;
+    if (m[2] === undefined) return { mode: 'select' as const, token: m[1]! };
+    const command = m[1]!.toLocaleLowerCase();
+    if (!ARG_COMMANDS.includes(command)) return null;
+    return { mode: 'arg' as const, command, rest: m[3] ?? '' };
+  });
+  const query = computed(() => (parsed.value?.mode === 'select' ? parsed.value.token : ''));
+
+  // The session's pinned objective, read from the live snapshot; null when unset.
+  const currentGoal = computed(() => {
+    const g = (chat.snapshot.value?.config as { goal?: unknown } | undefined)?.goal;
+    return typeof g === 'string' && g.trim() ? g.trim() : null;
+  });
+  async function applyGoal(goal: string | null) {
+    const id = params.sessionId.value; params.setText('');
+    try {
+      await api.sessionSetGoal(id, goal);
+      await chat.reload();
+      toast(goal ? tr('已设定会话目标。', 'Session goal set.') : tr('已清除会话目标。', 'Session goal cleared.'));
+    } catch (error) { showError({ title: tr('无法更新目标', 'Could not update goal'), error }); }
+  }
 
   // Skills are loaded once, lazily, on first open — the catalog is small and the
   // reader rarely opens the palette on the very first keystroke.
@@ -81,6 +106,18 @@ export function useSlashPalette(params: {
         try { const snap = await api.sessionFork(id); await sessions.refresh(); await router.push('/s/' + snap.id); toast(tr('已分支出新会话。', 'Branched a new session.')); }
         catch (error) { showError({ title: tr('无法分支', 'Could not branch'), error }); }
       } },
+    { key: 'cmd:goal', kind: 'command', icon: 'target',
+      title: currentGoal.value ? tr('修改目标', 'Change goal') : tr('设定目标', 'Set goal'),
+      desc: currentGoal.value ? tr('当前：', 'Current: ') + currentGoal.value
+        : tr('为本会话固定一个目标，随每次请求发送', 'Pin an objective sent with every request'),
+      keywords: 'goal objective mubiao 目标 mokiao shezhi 设定 修改',
+      // Enter capture mode: seed "/goal " and let the reader type the objective.
+      run: () => { params.setText('/goal '); dismissed.value = null; params.focusEditor(); } },
+    ...(currentGoal.value ? [{ key: 'cmd:goal-clear', kind: 'command' as const, icon: 'flag-off',
+      title: tr('清除目标', 'Clear goal'),
+      desc: tr('移除本会话固定的目标', "Remove this session's pinned objective"),
+      keywords: 'clear goal qingchu mubiao 清除 目标',
+      run: () => applyGoal(null) }] : []),
   ]);
 
   const skillItems = computed<SlashItem[]>(() =>
@@ -96,6 +133,19 @@ export function useSlashPalette(params: {
   );
 
   const items = computed<SlashItem[]>(() => {
+    const p = parsed.value;
+    if (p?.mode === 'arg' && p.command === 'goal') {
+      const rest = p.rest.trim();
+      return [{
+        key: 'goal:set', kind: 'command', icon: 'target',
+        title: rest ? tr('设定目标：', 'Set goal: ') + rest : tr('设定目标', 'Set goal'),
+        desc: rest ? tr('回车确认，作为固定指令随每次请求发送', 'Enter to pin it as an instruction on every request')
+          : tr('继续输入目标内容，回车确认', 'Type the objective, then Enter to confirm'),
+        keywords: '',
+        // With no text yet, Enter should not clear an existing goal — keep the caret.
+        run: rest ? () => applyGoal(rest) : () => params.focusEditor(),
+      }];
+    }
     const term = query.value.trim().toLocaleLowerCase();
     const pool = [...commands.value, ...skillItems.value];
     if (!term) return pool;
@@ -104,7 +154,7 @@ export function useSlashPalette(params: {
 
   const open = ref(false);
   watch([params.text, params.enabled], () => {
-    const matches = params.enabled.value && /^\/[^\s]*$/.test(params.text.value);
+    const matches = params.enabled.value && parsed.value !== null;
     open.value = matches && params.text.value !== dismissed.value;
     if (open.value) { void ensureSkills(); }
   }, { immediate: true });

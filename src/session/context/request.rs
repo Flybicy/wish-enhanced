@@ -39,6 +39,7 @@ use crate::protocol::{Message, model_use::request::ToolChoice};
 use crate::session::SessionConfig;
 impl SessionConfig {
   pub(crate) fn build_request(&self, conversation: Vec<Message>) -> Request {
+    let conversation = self.with_goal(conversation);
     Request {
       model: self.model.clone(),
       stream: self.stream,
@@ -49,6 +50,24 @@ impl SessionConfig {
       cache: self.cache.clone(),
       conversation,
     }
+  }
+
+  /// Prepend the session goal, if any, as a pinned Developer instruction. It leads every request
+  /// so the model always sees the objective; being synthesized here it never enters the stored
+  /// entry log, so clearing the goal is a scalar change with no conversation surgery.
+  fn with_goal(&self, conversation: Vec<Message>) -> Vec<Message> {
+    let goal = self.goal.as_deref().map(str::trim).filter(|g| !g.is_empty());
+    let Some(goal) = goal else { return conversation };
+    let mut out = Vec::with_capacity(conversation.len() + 1);
+    out.push(Message::Developer {
+      metadata: serde_json::Value::Null,
+      fixed: Some(true),
+      content: vec![crate::protocol::ContentBlock::Text {
+        text: format!("Current objective for this session:\n{goal}"),
+      }],
+    });
+    out.extend(conversation);
+    out
   }
 }
 
@@ -76,5 +95,53 @@ impl crate::session::SessionHandle {
       crate::session::context::validate_tool_pairs(request.conversation.iter())?;
       Ok(request)
     })
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use crate::protocol::{ContentBlock, Message};
+  use crate::session::config::SessionConfig;
+
+  fn user(text: &str) -> Message {
+    Message::User { metadata: serde_json::Value::Null, content: vec![ContentBlock::Text { text: text.into() }] }
+  }
+
+  #[test]
+  fn no_goal_leaves_conversation_untouched() {
+    let config = SessionConfig::new("m");
+    let out = config.with_goal(vec![user("hi")]);
+    assert_eq!(out.len(), 1);
+    assert!(matches!(out[0], Message::User { .. }));
+  }
+
+  #[test]
+  fn blank_goal_is_ignored() {
+    let mut config = SessionConfig::new("m");
+    config.goal = Some("   ".into());
+    let out = config.with_goal(vec![user("hi")]);
+    assert_eq!(out.len(), 1);
+    assert!(matches!(out[0], Message::User { .. }));
+  }
+
+  #[test]
+  fn goal_prepends_a_pinned_developer_instruction() {
+    let mut config = SessionConfig::new("m");
+    config.goal = Some("  ship it  ".into());
+    let out = config.with_goal(vec![user("hi")]);
+    assert_eq!(out.len(), 2);
+    match &out[0] {
+      Message::Developer { fixed, content, .. } => {
+        assert_eq!(*fixed, Some(true));
+        match &content[0] {
+          ContentBlock::Text { text } => {
+            assert_eq!(text, "Current objective for this session:\nship it");
+          }
+          _ => panic!("expected text block"),
+        }
+      }
+      other => panic!("expected pinned Developer, got {other:?}"),
+    }
+    assert!(matches!(out[1], Message::User { .. }));
   }
 }

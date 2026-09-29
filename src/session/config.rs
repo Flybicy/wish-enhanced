@@ -28,6 +28,10 @@ pub struct SessionConfig {
   pub run: RunOptions,
   #[serde(default)]
   pub compaction: Option<super::CompactionConfig>,
+  /// A persistent objective, injected as a pinned Developer instruction at the head of every
+  /// request so it survives compaction and context clears. None or empty means no goal.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub goal: Option<String>,
 }
 
 impl SessionConfig {
@@ -41,6 +45,7 @@ impl SessionConfig {
       cache: None,
       run: RunOptions::default(),
       compaction: None,
+      goal: None,
     }
   }
 }

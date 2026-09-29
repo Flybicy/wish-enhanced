@@ -96,6 +96,36 @@ pub async fn set_config(
   })
   .await
 }
+/// Body: `{"goal": "..."}` to set the persistent objective, or `{"goal": null}` to clear it.
+/// The goal rides every request as a pinned instruction; it is not part of the conversation log.
+pub async fn set_goal(
+  State(app): State<Arc<App>>,
+  Path(id): Path<String>,
+  Json(request): Json<SessionGoalRequest>,
+) -> Result<Json<Value>, ApiError> {
+  app.require_open()?;
+  let slot = app.get_session(&id).await?;
+  let mut session =
+    slot.session.clone().try_lock_owned().map_err(|_| ApiError::conflict("session is running"))?;
+  blocking(move || {
+    slot.require_live()?;
+    let mut config = session.get_config().clone();
+    config.goal = request.goal.filter(|g| !g.trim().is_empty());
+    session.set_config(config)?;
+    slot.update_snapshot(&session);
+    slot.persist_index()?;
+    Ok(Json(slot.describe()))
+  })
+  .await
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionGoalRequest {
+  #[serde(default)]
+  pub goal: Option<String>,
+}
+
 /// Body: `{"program", "args"}` for the session's own shell, or null to follow the application's.
 pub async fn set_shell(
   State(app): State<Arc<App>>,

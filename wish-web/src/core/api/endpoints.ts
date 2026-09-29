@@ -144,6 +144,8 @@ export const sessionClearContext = (id: string) => post(`${path(id)}/context/cle
 export const sessionFork = async (id: string, entryId?: number) => sessionView(await post(`${path(id)}/fork`, entryId == null ? {} : { entry_id: entryId }));
 // Rewind the live thread: drop everything after the given entry.
 export const sessionRewind = async (id: string, entryId: number) => sessionView(await post(`${path(id)}/rewind`, { entry_id: entryId }));
+// Set (goal string) or clear (null) the session's persistent objective; it rides every request as a pinned instruction.
+export const sessionSetGoal = async (id: string, goal: string | null) => sessionView(await post(`${path(id)}/goal`, { goal }));
 export async function deliveriesList(id: string, params?: { limit?: number }, opts?: EndpointOptions): Promise<{ items: QueuedDelivery[]; has_more: boolean }> {
   const snap = await sessionGet(id, opts);
   const page = await get(`${path(id)}/queue`, {query:{start:snap.status.queue_head,limit:params?.limit ?? 50},...opts});

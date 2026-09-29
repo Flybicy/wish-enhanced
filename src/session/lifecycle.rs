@@ -103,6 +103,7 @@ impl Session {
       cache: request.cache,
       run: Default::default(),
       compaction: None,
+      goal: None,
     };
     let mut session = Self::new(config)?;
     session.update(move |transaction| {
