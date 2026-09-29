@@ -2,19 +2,19 @@
   <!-- Application tile: the folded crane on a warm-paper ground, folded in the
        same hanako seal palette as mark.svg. Keep the two in sync. -->
   <rect x="60" y="70" width="680" height="540" rx="96" fill="#F5EFE4"/>
-  <g stroke="#2F556B" stroke-width="5" stroke-linejoin="round" transform="translate(10,10)">
-    <polygon points="180,90 320,376 297,391 255,396" fill="#7FA8BE"/>
-    <polygon points="320,376 365,347 387,278 662,125 460,370 402,322 297,391" fill="#9BBCCE"/>
-    <polygon points="662,125 626,395 590,420 470,440 497,400 460,370" fill="#5C8AA3"/>
-    <polygon points="315,530 395,521 445,512 482,478 480,590" fill="#3F6E88"/>
-    <polygon points="82,553 255,396 297,391 375,431" fill="#CBDFE8"/>
-    <polygon points="82,553 375,431 482,478 445,512 395,521" fill="#7FA8BE"/>
-    <polygon points="297,391 402,322 375,431" fill="#9BBCCE"/>
-    <polygon points="402,322 470,440 482,478 375,431" fill="#7FA8BE"/>
-    <polygon points="402,322 497,400 470,440" fill="#3F6E88"/>
-    <polygon points="480,590 630,273 639,272 522,565" fill="#2A4C60"/>
-    <polygon points="630,273 702,376 639,272" fill="#5C8AA3"/>
-    <polygon points="595,276 702,376 630,273" fill="#CBDFE8"/>
-    <polygon points="482,478 470,440 595,276 630,273 480,590" fill="#9BBCCE"/>
+  <g stroke="#3A6480" stroke-width="4" stroke-linejoin="round" transform="translate(10,10)">
+    <polygon points="180,90 320,376 297,391 255,396" fill="#8FB4C8"/>
+    <polygon points="320,376 365,347 387,278 662,125 460,370 402,322 297,391" fill="#B9D5E1"/>
+    <polygon points="662,125 626,395 590,420 470,440 497,400 460,370" fill="#4E7C97"/>
+    <polygon points="315,530 395,521 445,512 482,478 480,590" fill="#31607C"/>
+    <polygon points="82,553 255,396 297,391 375,431" fill="#DCEAF1"/>
+    <polygon points="82,553 375,431 482,478 445,512 395,521" fill="#8FB4C8"/>
+    <polygon points="297,391 402,322 375,431" fill="#B9D5E1"/>
+    <polygon points="402,322 470,440 482,478 375,431" fill="#8FB4C8"/>
+    <polygon points="402,322 497,400 470,440" fill="#31607C"/>
+    <polygon points="480,590 630,273 639,272 522,565" fill="#234A61"/>
+    <polygon points="630,273 702,376 639,272" fill="#4E7C97"/>
+    <polygon points="595,276 702,376 630,273" fill="#DCEAF1"/>
+    <polygon points="482,478 470,440 595,276 630,273 480,590" fill="#B9D5E1"/>
   </g>
 </svg>
