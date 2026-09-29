@@ -71,12 +71,12 @@ jobs:
         run: |
           # Embedded Python with the document stack, so installed sessions can
           # write Word/Excel/PowerPoint/PDF without any system prerequisites.
-          Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.13.2/python-3.13.2-embed-amd64.zip" -OutFile "$env:TEMPpython-embed.zip"
-          Expand-Archive "$env:TEMPpython-embed.zip" dist/wish/python
+          Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.13.2/python-3.13.2-embed-amd64.zip" -OutFile "${env:TEMP}\python-embed.zip"
+          Expand-Archive "${env:TEMP}\python-embed.zip" dist/wish/python
           $pth = Get-ChildItem dist/wish/python/*._pth | Select-Object -First 1
           (Get-Content $pth.FullName -Raw) -replace '#import site', 'import site' | Set-Content $pth.FullName -NoNewline
-          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile "$env:TEMPget-pip.py"
-          dist/wish/python/python.exe "$env:TEMPget-pip.py" --no-warn-script-location
+          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile "${env:TEMP}\get-pip.py"
+          dist/wish/python/python.exe "${env:TEMP}\get-pip.py" --no-warn-script-location
           dist/wish/python/python.exe -m pip install --no-warn-script-location python-docx openpyxl python-pptx pypdf reportlab markdown
           dist/wish/python/python.exe -c "import docx, openpyxl, pptx, pypdf, reportlab, markdown; print('bundled python OK')"
 
@@ -85,12 +85,12 @@ jobs:
           # The common agent runtimes: Node for JS/TS tooling, MinGit so version
           # control (and the snapshot tool's shadow repositories) work on a
           # bare system with no developer prerequisites.
-          Invoke-WebRequest -Uri "https://nodejs.org/dist/v22.14.0/node-v22.14.0-win-x64.zip" -OutFile "$env:TEMP\node.zip"
-          Expand-Archive "$env:TEMP\node.zip" "$env:TEMP\node"
-          $dir = Get-ChildItem "$env:TEMP\node" -Directory | Select-Object -First 1
+          Invoke-WebRequest -Uri "https://nodejs.org/dist/v22.14.0/node-v22.14.0-win-x64.zip" -OutFile "${env:TEMP}\node.zip"
+          Expand-Archive "${env:TEMP}\node.zip" "$env:TEMP\node"
+          $dir = Get-ChildItem "${env:TEMP}\node" -Directory | Select-Object -First 1
           Move-Item $dir.FullName dist/wish/node
-          Invoke-WebRequest -Uri "https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/MinGit-2.47.1-64-bit.zip" -OutFile "$env:TEMP\mingit.zip"
-          Expand-Archive "$env:TEMP\mingit.zip" dist/wish/git
+          Invoke-WebRequest -Uri "https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/MinGit-2.47.1-64-bit.zip" -OutFile "${env:TEMP}\mingit.zip"
+          Expand-Archive "${env:TEMP}\mingit.zip" dist/wish/git
           dist/wish/node/node.exe -e "console.log('bundled node', process.version)"
           dist/wish/git/cmd/git.exe --version
 
