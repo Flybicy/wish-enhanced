@@ -45,8 +45,8 @@ export const cfg = Object.freeze({
   composer: {
     mobileMinRows: 1,
     mobileMaxRows: 6,
-    desktopHeightRatio: 0.24,
-    desktopMinHeight: 160,
+    desktopHeightRatio: 0.11,
+    desktopMinHeight: 96,
     desktopMaxHeightRatio: 0.6,
     resizeStep: 24,
     mobileMaxHeightVh: 0.3,

@@ -54,7 +54,7 @@ onBeforeUnmount(cancelListResize);
     </div>
     <WorkspaceRail v-if="showRail" :session-id="railSessionId" @close="prefs.setWorkspaceRail(false)">
       <template #note>
-        <AskContext :session-id="railSessionId" :hidden="false" external-input />
+        <AskContext :session-id="railSessionId" :hidden="false" />
       </template>
     </WorkspaceRail>
   </div>

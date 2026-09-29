@@ -180,7 +180,8 @@
   border-radius: 16px;
   box-shadow: var(--shadow-pop);
 }
-.chat-pane > .composer.desktop:focus-within { border-color: var(--accent); }
+.chat-pane > .composer.desktop { transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out); }
+.chat-pane > .composer.desktop:focus-within { border-color: var(--accent); box-shadow: var(--shadow-pop), 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
 .chat-pane > .composer.desktop:focus-within .composer-input { background: none; }
 .resizing-composer .composer.desktop { transition: none; }
 .composer-toolbar { display: flex; align-items: center; flex: none; gap: 8px; padding: 6px 0 0; }
@@ -204,6 +205,11 @@
 .composer .send-btn.stop { color: var(--err); }
 @media (hover: hover) { .composer .send-btn.stop:hover:not(:disabled) { color: var(--err); } }
 .composer .send-btn .icon { width: 16px; height: 16px; }
+/* The send button fills with the seal the instant a message can go — a
+   confident primary action, quiet until it matters. */
+.composer .send-btn.ready { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); box-shadow: var(--glow-on); }
+@media (hover: hover) { .composer .send-btn.ready:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); color: var(--accent-fg); } }
+.composer .send-btn.ready .icon { transform: translateX(0.5px); }
 .composer.mobile { padding: 6px 12px calc(14px + env(safe-area-inset-bottom)); }
 .chat-pane > .composer.mobile {
   margin: 6px 12px 10px;

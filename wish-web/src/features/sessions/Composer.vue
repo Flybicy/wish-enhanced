@@ -345,7 +345,7 @@ const { startComposerDrag, resizeKeys } = useComposerDrag(sizing, height);
         @click="btwBusy ? btwChat?.stopAnswer() : submitBtw()">
         <Icon :name="btwBusy ? 'square' : 'send'" />
       </button></Hint>
-      <Hint v-else-if="mobile && !start" :text="i18n.t(running ? 'chat.stop' : 'chat.send')"><button class="send-btn" :class="{ stop: running }" :disabled="sending || (!running && !canSend)"
+      <Hint v-else-if="mobile && !start" :text="i18n.t(running ? 'chat.stop' : 'chat.send')"><button class="send-btn" :class="{ stop: running, ready: !running && canSend }" :disabled="sending || (!running && !canSend)"
         :aria-label="i18n.t(running ? 'chat.stop' : 'chat.send')"
         @click="running ? onStop() : submit()">
         <Icon v-if="sending" name="loader-circle" class="spin" />
@@ -358,7 +358,7 @@ const { startComposerDrag, resizeKeys } = useComposerDrag(sizing, height);
         :aria-label="i18n.t('chat.queueSend')" @click="submit()">
         <Icon v-if="sending" name="loader-circle" class="spin" /><Icon v-else name="send" />
       </button></Hint>
-      <Hint :text="running ? `${i18n.t('chat.stop')} (Esc)` : i18n.t('chat.send')"><button :aria-keyshortcuts="running ? 'Escape' : undefined" class="send-btn" :class="{ stop: running }" :disabled="sending || (!running && !canSend)"
+      <Hint :text="running ? `${i18n.t('chat.stop')} (Esc)` : i18n.t('chat.send')"><button :aria-keyshortcuts="running ? 'Escape' : undefined" class="send-btn" :class="{ stop: running, ready: !running && canSend }" :disabled="sending || (!running && !canSend)"
         :aria-label="i18n.t(running ? 'chat.stop' : 'chat.send')"
         @click="running ? onStop() : submit()">
         <Icon v-if="sending" name="loader-circle" class="spin" />

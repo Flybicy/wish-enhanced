@@ -5,6 +5,7 @@ mod manage;
 mod providers;
 mod sessions;
 mod statistics;
+mod skills;
 mod workspace;
 use crate::server::{app::App, error::ApiError};
 use axum::{
@@ -41,6 +42,7 @@ pub fn build_router(app: Arc<App>) -> Router {
     .route("/shells", get(|| async { Json(crate::server::config::shell_catalog()) }))
     .route("/defaults", get(manage::defaults))
     .route("/directories", get(directories::list))
+    .route("/skills", get(skills::catalog))
     .route("/events", get(manage::events))
     .route(
       "/version",

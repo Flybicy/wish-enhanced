@@ -375,3 +375,14 @@
   .provider-add-icon { width: 34px; height: 34px; border-radius: 10px; }
   .provider-add-icon .icon { width: 18px; height: 18px; }
 }
+
+/* Capabilities: directory rows carry their skill count, MCP cards stack. */
+.set-number select.input { min-width: 18ch; }
+.set-number.skills-dir-controls { width: 100%; }
+.set-number.skills-dir-controls .input { width: 100%; flex: 1; min-width: 200px; }
+.skills-dir-add { margin: 10px 14px; }
+.mcp-card { margin-bottom: 10px; }
+.mcp-card .set-number .input { width: 100%; flex: 1; min-width: 200px; }
+.mcp-card textarea.input { font-family: var(--mono); font-size: 12px; }
+.mcp-add { display: flex; align-items: center; gap: 8px; padding: 12px 14px; }
+.mcp-add .input { flex: 1; min-width: 160px; }

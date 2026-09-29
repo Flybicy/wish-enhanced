@@ -29,7 +29,8 @@ async function copyPath() {
   setTimeout(() => { copying.value = ''; }, 1400);
 }
 
-// 笺 — the note taped along the rail's foot, opened on demand.
+// BTW — the aside taped along the rail's foot, opened on demand. It asks
+// against the live context without disturbing the main thread.
 const noteOpen = ref(prefs.btwRail.value);
 watch(noteOpen, value => prefs.setBtwRail(value));
 </script>
@@ -51,7 +52,7 @@ watch(noteOpen, value => prefs.setBtwRail(value));
     <section class="rail-card rail-note" :class="{ open: noteOpen }">
       <button type="button" class="note-head" :aria-expanded="noteOpen" @click="noteOpen = !noteOpen">
         <Icon :name="noteOpen ? 'chevron-down' : 'chevron-up'" />
-        <span>{{ tr('笺', 'Note') }}</span>
+        <span>{{ tr('BTW', 'BTW') }}</span>
         <small>{{ tr('侧问 · 不打断主线', 'Aside · keeps the thread') }}</small>
       </button>
       <div v-show="noteOpen" class="note-body">
@@ -95,5 +96,18 @@ html[data-theme='dark'] .rail-card { box-shadow: 0 1px 2px rgb(0 0 0 / 18%); }
 @media (hover: hover) { .note-head:hover { color: var(--fg); } }
 .note-head .icon { width: 14px; height: 14px; color: var(--accent); }
 .note-head small { margin-left: auto; font-weight: 400; font-size: 10.5px; color: var(--fg-faint); }
-.note-body { max-height: 44vh; overflow-y: auto; padding: 0 12px 12px; }
+.note-body { min-height: 260px; max-height: 46vh; overflow-y: auto; padding: 0 12px 12px; }
+/* The head already names the aside, so the inner label would only repeat it;
+   its clear button stays. The log becomes an inset sheet on the card. */
+.note-body :deep(.ask-heading > div) { display: none; }
+.note-body :deep(.ask-log) { padding: 8px 12px 4px; }
+.note-body :deep(.ask-composer) { border-top: 0; background: transparent; padding: 8px 4px 4px; }
+/* The aside's input reads as a field on the card: what is typed sits inside
+   the box, and focus picks up the seal accent. */
+.note-body :deep(.ask-composer textarea) {
+  background: var(--bg-inset); border: 1px solid var(--line); border-radius: 10px;
+  padding: 9px 12px; min-height: 64px; line-height: 1.6;
+}
+.note-body :deep(.ask-composer:focus-within) { border-top-color: transparent; }
+.note-body :deep(.ask-composer:focus-within textarea) { border-color: var(--accent); }
 </style>
