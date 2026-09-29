@@ -162,6 +162,8 @@ export const cancelQueuedInput = (id: string, entry: string) => del(`${path(id)}
 export const providerConfigs = async (opts?: EndpointOptions): Promise<{ providers: ProviderView[] }> => ({providers:(await get('/providers',opts)).items.map(providerView)});
 export const providerModels = async (id: string,opts?: EndpointOptions) => {const result=await get(`/providers/${encodeURIComponent(id)}/models`,opts);return {...result,models:result.items.map((m: any)=>({...m,display_name:m.name,allowed_for_provider:true}))};};
 export const configEffective = (): Promise<EffectiveConfig> => get('/defaults');
+// Fetch a markdown skill from an http(s) URL into a known directory; returns { name, path, directory }.
+export const skillInstall = (source: string, target?: string | null, name?: string | null): Promise<{ name: string; path: string; directory: string }> => post('/skills/install', { source, target: target || undefined, name: name || undefined });
 export async function rememberDefaultModel(value: DefaultModel): Promise<void> {
   for (let attempt = 0; attempt < 3; attempt++) {
     const snapshot = await get('/config');

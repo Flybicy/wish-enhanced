@@ -17,6 +17,8 @@ import ServerProxySettings from './ServerProxySettings.vue';
 import ServerShellSettings from './ServerShellSettings.vue';
 import './settings.css';
 import { get } from '../../core/api/client.ts';
+import { skillInstall } from '../../core/api/endpoints.ts';
+import { toast } from '../../ui/toast.ts';
 import { useConfigDraft } from './useConfigDraft.ts';
 import Wordmark from '../../ui/components/Wordmark.vue';
 import { cfg } from '../../core/config.ts';
@@ -117,6 +119,26 @@ function skillCount(dir: string) {
   const hit = skillCatalog.value.directories?.find((entry: any) => entry.path === dir);
   return hit ? hit.count + ' ' + tr('个技能', 'skills') : tr('没有技能', 'no skills');
 }
+// Skill install: fetch a markdown skill from a URL into a known directory.
+const installUrl = ref('');
+const installTarget = ref('');
+const installing = ref(false);
+async function installSkill() {
+  const source = installUrl.value.trim();
+  if (!source || installing.value) return;
+  installing.value = true;
+  try {
+    const result = await skillInstall(source, installTarget.value.trim() || null);
+    await loadSkillCatalog();
+    installUrl.value = '';
+    toast(tr('已安装技能 ', 'Installed skill ') + result.name);
+  } catch (error: any) {
+    toast(tr('安装失败：', 'Install failed: ') + (error?.message ?? error));
+  } finally {
+    installing.value = false;
+  }
+}
+
 // MCP environment and headers read as KEY=value lines, one pair per row.
 const kvText = (map: Record<string, string> | undefined) =>
   Object.entries(map ?? {}).map(([key, value]) => key + '=' + value).join('\n');
@@ -235,6 +257,17 @@ onMounted(load);
             </div>
             <div class="set-row"><span class="set-label"><span>{{tr('内置目录','Built-in directory')}}</span><small>{{builtinSkillsDir || '—'}} · {{builtinSkillCount}}</small></span></div>
             <button type="button" class="btn ghost skills-dir-add" @click="draft.skills.dirs.push('')"><Icon name="plus"/>{{tr('添加目录','Add directory')}}</button>
+            <div class="set-row skills-install">
+              <span class="set-label"><span>{{tr('从 URL 安装','Install from URL')}}</span><small>{{tr('抓取 http(s) 上的 markdown 技能文件，落到所选目录','Fetch a markdown skill over http(s) into the chosen directory')}}</small></span>
+              <span class="set-number skills-install-controls">
+                <input class="input" v-model="installUrl" type="url" placeholder="https://…/skill.md" autocomplete="off" autocapitalize="off" spellcheck="false" @keydown.enter.prevent="installSkill"/>
+                <select class="input" v-model="installTarget" :aria-label="tr('目标目录','Target directory')">
+                  <option value="">{{tr('内置目录','Built-in directory')}}</option>
+                  <option v-for="(dir, i) in draft.skills.dirs" :key="i" :value="dir">{{dir || tr('（空目录）','(empty)')}}</option>
+                </select>
+                <button type="button" class="btn" :disabled="installing || !installUrl.trim()" @click="installSkill"><Icon name="download"/>{{installing ? tr('安装中…','Installing…') : tr('安装','Install')}}</button>
+              </span>
+            </div>
           </div>
         </section>
         <section v-if="draft.memory" class="set-section">

@@ -43,6 +43,7 @@ pub fn build_router(app: Arc<App>) -> Router {
     .route("/defaults", get(manage::defaults))
     .route("/directories", get(directories::list))
     .route("/skills", get(skills::catalog))
+    .route("/skills/install", post(skills::install))
     .route("/events", get(manage::events))
     .route(
       "/version",
