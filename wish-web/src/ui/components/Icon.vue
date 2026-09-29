@@ -8,6 +8,7 @@ import {
   Plus, RefreshCw, Search, Send, Settings, Settings2, Sparkles, Square,
   Sun, Moon, Terminal, Trash2, Wrench, X, Bell, Keyboard, Accessibility,
   Smartphone, AppWindow, Info, PanelLeft, PanelRight, Paperclip, Languages, TriangleAlert, LogOut,
+  GitBranch, Undo2,
 } from '@lucide/vue';
 import { computed, type FunctionalComponent } from 'vue';
 
@@ -25,7 +26,7 @@ const ICONS: Record<string, FunctionalComponent> = {
   smartphone: Smartphone, 'app-window': AppWindow, info: Info,
   'panel-left': PanelLeft, 'panel-right': PanelRight, paperclip: Paperclip, languages: Languages,
   'triangle-alert': TriangleAlert, 'file-diff': FileDiff, save: Save, 'external-link': ExternalLink,
-  'log-out': LogOut,
+  'log-out': LogOut, 'git-branch': GitBranch, 'undo-2': Undo2,
 };
 
 const props = defineProps<{ name: string }>();

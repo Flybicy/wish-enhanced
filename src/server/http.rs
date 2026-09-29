@@ -49,6 +49,7 @@ pub fn build_router(app: Arc<App>) -> Router {
       get(|| async { Json(json!({"name":"wish","version":env!("CARGO_PKG_VERSION")})) }),
     )
     .route("/sessions/{id}/context/clear", post(manage::clear_context))
+    .route("/sessions/{id}/rewind", post(manage::rewind))
     .route("/sessions/{id}/fork", post(manage::fork))
     .route(
       "/sessions/{id}/queue/{entry}",

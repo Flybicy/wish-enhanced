@@ -140,7 +140,10 @@ export const sessionUpdateConfig = async (id: string, config: unknown, revision?
 export const sessionSetShell = async (id: string, settings: ShellSettings | null) => sessionView(await put(`${path(id)}/shell`, settings));
 export const sessionCompact = (id: string) => post(`${path(id)}/compact`);
 export const sessionClearContext = (id: string) => post(`${path(id)}/context/clear`);
-export const sessionFork = async (id: string) => sessionView(await post(`${path(id)}/fork`));
+// No entry: fork the whole conversation. With an entry id: branch from that turn.
+export const sessionFork = async (id: string, entryId?: number) => sessionView(await post(`${path(id)}/fork`, entryId == null ? {} : { entry_id: entryId }));
+// Rewind the live thread: drop everything after the given entry.
+export const sessionRewind = async (id: string, entryId: number) => sessionView(await post(`${path(id)}/rewind`, { entry_id: entryId }));
 export async function deliveriesList(id: string, params?: { limit?: number }, opts?: EndpointOptions): Promise<{ items: QueuedDelivery[]; has_more: boolean }> {
   const snap = await sessionGet(id, opts);
   const page = await get(`${path(id)}/queue`, {query:{start:snap.status.queue_head,limit:params?.limit ?? 50},...opts});

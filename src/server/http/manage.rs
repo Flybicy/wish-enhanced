@@ -277,9 +277,64 @@ pub async fn clear_context(
   })
   .await
 }
+/// The active generation's entry ids up to and including target, or 404 if the
+/// target is not part of the live thread.
+fn prefix_through(
+  entries: &crate::storage::ReadList<EntryId>,
+  target: EntryId,
+) -> Result<Vec<EntryId>, ApiError> {
+  let mut prefix = Vec::new();
+  let mut position = 0u64;
+  while let Some(id) = entries.get(position)? {
+    prefix.push(*id);
+    if *id == target {
+      return Ok(prefix);
+    }
+    position += 1;
+  }
+  Err(ApiError::not_found())
+}
+
+/// Rewind the live thread to an earlier turn: everything after the chosen entry
+/// is dropped. The old generation is sealed (kept for audit), not deleted, and a
+/// fresh active generation is built from the prefix up to and including entry_id.
+#[derive(Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct PointRequest {
+  /// The EntryId to keep as the last entry of the thread.
+  pub entry_id: Option<usize>,
+}
+pub async fn rewind(
+  State(app): State<Arc<App>>,
+  Path(id): Path<String>,
+  Json(body): Json<PointRequest>,
+) -> Result<Json<Value>, ApiError> {
+  let target =
+    EntryId(body.entry_id.ok_or_else(|| ApiError::bad_request("entry_id is required"))?);
+  let slot = app.get_session(&id).await?;
+  let mut session =
+    slot.session.clone().try_lock_owned().map_err(|_| ApiError::conflict("session is running"))?;
+  blocking(move || {
+    slot.require_live()?;
+    let generation = session.get_active_generation()?;
+    let entries = session.get_generation_entries(generation.id)?;
+    let prefix = prefix_through(&entries, target)?;
+    session.prepare_standby_generation(prefix)?;
+    session.activate_standby_generation()?;
+    slot.update_snapshot(&session);
+    slot.persist_index()?;
+    Ok(Json(slot.describe()))
+  })
+  .await
+}
+
+/// Fork the session. With no body (or {}), the whole conversation is copied; with
+/// {"entry_id": N} only the prefix up to and including N is carried into the copy,
+/// so the fork branches from that turn.
 pub async fn fork(
   State(app): State<Arc<App>>,
   Path(id): Path<String>,
+  Json(body): Json<PointRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
   let slot = app.get_session(&id).await?;
   let session =
@@ -287,7 +342,19 @@ pub async fn fork(
   let descriptor = slot.get_descriptor();
   let mut config = session.get_config().clone();
   config.tools.clear();
-  let request = session.build_request()?;
+  let conversation = match body.entry_id {
+    Some(entry_id) => {
+      let generation = session.get_active_generation()?;
+      let entries = session.get_generation_entries(generation.id)?;
+      let prefix = prefix_through(&entries, EntryId(entry_id))?;
+      prefix
+        .iter()
+        .map(|id| session.get_entry(*id).map(|entry| entry.map(|entry| entry.message.clone())))
+        .collect::<Result<Option<Vec<Message>>, _>>()?
+        .ok_or_else(ApiError::not_found)?
+    }
+    None => session.build_request()?.conversation,
+  };
   let input = CreateSession {
     name: format!("{} (copy)", descriptor.name),
     provider: descriptor.provider,
@@ -295,7 +362,7 @@ pub async fn fork(
     shell: descriptor.shell,
     config,
     metadata: session.get_metadata().clone(),
-    initial_messages: request.conversation,
+    initial_messages: conversation,
   };
   drop(session);
   Ok((StatusCode::CREATED, Json(app.create_session(input).await?.describe())))
