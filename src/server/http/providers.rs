@@ -140,6 +140,46 @@ pub async fn models(
   })).collect::<Vec<_>>(),"next_cursor":catalog.next_cursor,"warnings":catalog.warnings}),
   ))
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProbeQuery {
+  cursor: Option<String>,
+  limit: Option<u32>,
+}
+/// List models for an unsaved draft provider, so the setup wizard can offer a
+/// picker before anything reaches the configuration. The key travels in memory
+/// only and nothing is persisted or cached across calls.
+pub async fn probe_models(
+  State(app): State<Arc<App>>,
+  Query(query): Query<ProbeQuery>,
+  Json(draft): Json<crate::server::provider::ProviderConfig>,
+) -> Result<Json<Value>, ApiError> {
+  app.require_open()?;
+  let path = draft
+    .model_list_path
+    .clone()
+    .filter(|path| !path.is_empty())
+    .unwrap_or_else(|| "/v1/models".into());
+  let base = draft
+    .model_list_base_url
+    .clone()
+    .filter(|base| !base.is_empty())
+    .unwrap_or_else(|| draft.base_url.clone());
+  let proxy = app.configuration.lock().await.config.proxy.clone();
+  let provider = crate::server::provider::Provider::build(draft, &proxy)?;
+  let mut page = ModelListQuery::first(&base, &path);
+  page.unauthenticated = matches!(provider.config.auth, crate::server::provider::Auth::None);
+  page.cursor = query.cursor;
+  if let Some(limit) = query.limit {
+    page.page_size = limit;
+  }
+  let catalog = provider.catalog.page(&provider.client, &page).await?;
+  Ok(Json(
+    json!({"protocol":catalog.protocol.get_id(),"items":catalog.models.into_iter().map(|m|json!({
+      "id":m.id,"name":m.name,"owner":m.owner,"created_at":m.created_at,"context_window":m.context_window,"max_output_tokens":m.max_output_tokens
+    })).collect::<Vec<_>>(),"next_cursor":catalog.next_cursor,"warnings":catalog.warnings}),
+  ))
+}
 pub async fn account(
   State(app): State<Arc<App>>,
   Path(id): Path<String>,

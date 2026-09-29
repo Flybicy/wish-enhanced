@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { get } from '../../core/api/client.ts';
+import { tr } from '../../core/i18n/tr.ts';
 import Icon from '../../ui/components/Icon.vue';
 
 defineEmits<{ close: [] }>();
@@ -43,20 +44,20 @@ const skills = computed(() => config.value?.config?.skills ?? null);
 const subagents = computed(() => config.value?.config?.subagents ?? null);
 
 const rows = computed(() => [
-  { key: 'web', label: 'Web Access', on: hasWeb.value, detail: hasWeb.value ? 'search + fetch + cache' : 'disabled in config' },
-  { key: 'snapshots', label: 'Workspace Snapshots', on: hasSnapshot.value, detail: hasSnapshot.value ? 'checkpoint / undo / redo' : 'no project detected' },
-  { key: 'skills', label: 'Skills', on: hasSkills.value, detail: hasSkills.value ? `enabled${skills.value?.enabled ? '' : ' (off)'}` : 'no skill dirs' },
-  { key: 'memory', label: 'Observational Memory', on: hasMemory.value, detail: hasMemory.value ? `observe ${memory.value?.observe_chars ?? '-'} / reflect ${memory.value?.reflect_chars ?? '-'}` : 'disabled in config' },
-  { key: 'subagents', label: 'Subagents', on: hasSubagents.value, detail: hasSubagents.value ? `pool ${subagents.value?.max_concurrent ?? '-'} / depth ${subagents.value?.max_depth ?? '-'}` : 'disabled in config' },
+  { key: 'web', label: tr('Web 检索', 'Web Access'), on: hasWeb.value, detail: hasWeb.value ? tr('搜索 + 抓取 + 缓存', 'search + fetch + cache') : tr('配置中未启用', 'disabled in config') },
+  { key: 'snapshots', label: tr('工作区快照', 'Workspace Snapshots'), on: hasSnapshot.value, detail: hasSnapshot.value ? tr('checkpoint / 撤销 / 重做', 'checkpoint / undo / redo') : tr('未检测到项目', 'no project detected') },
+  { key: 'skills', label: tr('技能库', 'Skills'), on: hasSkills.value, detail: hasSkills.value ? tr(`已启用${skills.value?.enabled ? '' : '（配置关闭）'}`, `enabled${skills.value?.enabled ? '' : ' (off)'}`) : tr('没有技能目录', 'no skill dirs') },
+  { key: 'memory', label: tr('观察式记忆', 'Observational Memory'), on: hasMemory.value, detail: hasMemory.value ? tr(`观察 ${memory.value?.observe_chars ?? '-'} / 反思 ${memory.value?.reflect_chars ?? '-'}`, `observe ${memory.value?.observe_chars ?? '-'} / reflect ${memory.value?.reflect_chars ?? '-'}`) : tr('配置中未启用', 'disabled in config') },
+  { key: 'subagents', label: tr('子代理', 'Subagents'), on: hasSubagents.value, detail: hasSubagents.value ? tr(`并发池 ${subagents.value?.max_concurrent ?? '-'} / 深度 ${subagents.value?.max_depth ?? '-'}`, `pool ${subagents.value?.max_concurrent ?? '-'} / depth ${subagents.value?.max_depth ?? '-'}`) : tr('配置中未启用', 'disabled in config') },
 ]);
 </script>
 
 <template>
   <section class="capabilities-pane" aria-label="Capabilities">
     <header class="pane-head">
-      <h2>Capabilities</h2>
+      <h2>{{ tr('能力面板', 'Capabilities') }}</h2>
     </header>
-    <p v-if="err" class="pane-error">Could not load configuration: {{ err }}</p>
+    <p v-if="err" class="pane-error">{{ tr('无法读取配置：', 'Could not load configuration: ') }}{{ err }}</p>
     <ul v-else class="capability-list">
       <li v-for="row in rows" :key="row.key" class="capability-row" :class="{ 'is-on': row.on }">
         <span class="dot" aria-hidden="true" />
@@ -65,7 +66,7 @@ const rows = computed(() => [
       </li>
     </ul>
     <div v-if="mcpServers.length" class="mcp-section">
-      <h3>MCP Servers</h3>
+      <h3>{{ tr('MCP 服务器', 'MCP Servers') }}</h3>
       <ul class="mcp-list">
         <li v-for="server in mcpServers" :key="server.id" class="mcp-row">
           <Icon name="layers" />

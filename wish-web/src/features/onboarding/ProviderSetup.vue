@@ -9,7 +9,8 @@ import Icon from '../../ui/components/Icon.vue';
 import { useProviderSetup } from './useProviderSetup.ts';
 const props = defineProps<{ preview?: boolean }>();
 const emit = defineEmits<{ complete: []; exit: [] }>();
-const { snapshot, catalog, loading, saving, error, choice, id, model, provider, preset, choose, load, save, setSecret, secretValue } = useProviderSetup({ preview: props.preview });
+const { snapshot, catalog, loading, saving, error, choice, id, model, provider, preset, choose, load, save, setSecret, secretValue, modelOptions, fetching, picked, fetchModels, pickModel } = useProviderSetup({ preview: props.preview });
+const contextLabel = (tokens?: number | null) => tokens ? (tokens >= 1024 ? Math.round(tokens / 1024) + 'k' : String(tokens)) : '';
 const options = computed(() => [
   ...Object.keys(snapshot.value?.config.providers ?? {}).map(id => ({ value: `existing:${id}`, label: tr('已有配置 · ', 'Existing · ') + id })),
   ...catalog.value.presets.map(item => ({ value: `preset:${item.id}`, label: `${providerName(item.provider)} · ${presetDescription(item)}`, brand: item.provider })),
@@ -43,7 +44,17 @@ async function finish() { if (await save()) emit('complete'); }
           <label>{{tr('服务地址', 'Service URL')}}<input class="input" v-model="provider.base_url" placeholder="https://api.example.com" type="url" required autocomplete="url" /></label>
           <label v-if="!['none', 'sig_v4'].includes(provider.auth)">API Key<input class="input" type="password" :value="secretValue()" @input="setSecret(($event.target as HTMLInputElement).value)" :placeholder="provider.api_key === '<redacted>' ? tr('已配置，留空保留', 'Configured; leave unchanged to retain') : tr('填写密钥或 ${ENV_NAME}', 'API key or ${ENV_NAME}')" autocomplete="new-password" spellcheck="false" /></label>
           <label v-for="field in credentials" :key="field">{{field}}<input class="input" type="password" :value="secretValue(field)" @input="setSecret(($event.target as HTMLInputElement).value, field)" :placeholder="provider.credentials[field] === '<redacted>' ? tr('已配置，留空保留', 'Configured; leave unchanged to retain') : '${ENV_NAME}'" autocomplete="new-password" /></label>
-          <label>{{tr('模型 ID', 'Model ID')}}<input class="input" v-model="model" required :placeholder="tr('填写提供商支持的模型 ID', 'Enter a model ID supported by the provider')" autocomplete="off" spellcheck="false" /></label>
+          <label>{{tr('模型 ID', 'Model ID')}}
+            <span class="model-row">
+              <input class="input" v-model="model" required list="probe-models" :placeholder="tr('可拉取列表或直接填写', 'Fetch the list, or type an ID')" autocomplete="off" spellcheck="false" @change="pickModel(model)" />
+              <datalist id="probe-models">
+                <option v-for="item in modelOptions" :key="item.id" :value="item.id">{{ item.name }}{{ contextLabel(item.context_window) ? ' · ' + contextLabel(item.context_window) + ' ctx' : '' }}</option>
+              </datalist>
+              <button class="btn ghost" type="button" :disabled="saving || fetching" @click="fetchModels"><Icon v-if="fetching" name="loader-circle" class="spin" />{{ fetching ? tr('拉取中…', 'Fetching…') : tr('拉取模型列表', 'Fetch models') }}</button>
+            </span>
+            <small v-if="picked" class="model-hint">{{ picked.name }}{{ contextLabel(picked.context_window) ? ' · ' + tr('上下文', 'context') + ' ' + contextLabel(picked.context_window) : '' }}{{ picked.max_output_tokens ? ' · ' + tr('最大输出', 'max output') + ' ' + contextLabel(picked.max_output_tokens) : '' }}</small>
+            <small v-else-if="modelOptions.length" class="model-hint">{{tr('已拉取 ', 'Fetched ')}}{{ modelOptions.length }}{{tr(' 个模型，在输入框中选择。', ' models; pick one in the field.')}}</small>
+          </label>
           <details class="setup-advanced"><summary>{{tr('连接选项', 'Connection options')}}</summary>
             <label>{{tr('提供商 ID', 'Provider ID')}}<input class="input" v-model="id" required autocomplete="off" spellcheck="false" /></label>
             <label>{{tr('请求协议', 'Request protocol')}}<SelectField v-model="provider.protocol" :disabled="saving" :options="PROTOCOL_OPTIONS.map(value => ({value, ...protocolPresentation(value)}))" /></label>
@@ -59,6 +70,10 @@ async function finish() { if (await save()) emit('complete'); }
   </main>
 </template>
 <style scoped>
+.model-row { display: flex; gap: 8px; align-items: center; }
+.model-row .input { flex: 1; min-width: 0; }
+.model-row .btn { flex: none; }
+.model-hint { display: block; margin-top: 6px; color: var(--fg-subtle); font-size: 12px; }
 .provider-setup{--setup-pad-y:48px;--setup-pad-x:28px;height:100dvh;overflow-y:auto;overscroll-behavior:contain;background:var(--bg);padding:var(--setup-pad-y) var(--setup-pad-x);box-sizing:border-box}
 .setup-preview-bar{position:sticky;top:calc(-1 * var(--setup-pad-y));z-index:1;display:flex;align-items:center;justify-content:space-between;gap:12px;margin:calc(-1 * var(--setup-pad-y)) calc(-1 * var(--setup-pad-x)) 32px;padding:8px var(--setup-pad-x);border-bottom:1px solid var(--line);background:var(--accent-soft);color:var(--accent);font-size:13px;font-weight:500}
 .setup-preview-bar span{display:inline-flex;align-items:center;gap:8px}

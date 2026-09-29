@@ -54,6 +54,7 @@ pub fn build_router(app: Arc<App>) -> Router {
     .route("/providers", get(providers::list))
     .route("/providers/{id}", get(providers::get))
     .route("/providers/{id}/models", get(providers::models))
+    .route("/providers/models/probe", post(providers::probe_models))
     .route("/providers/{id}/account", get(providers::account))
     .route(
       "/providers/{id}/chatgpt-login",

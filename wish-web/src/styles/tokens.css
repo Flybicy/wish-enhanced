@@ -35,7 +35,9 @@
   --shadow-card: none;
   --display: 'Bitter Variable', 'Noto Serif SC Variable', 'Songti SC', 'Noto Serif CJK SC', serif;
   --radius: 8px;
-  --prose: var(--font);
+  /* Prose reads in serif — the editorial, stationery-like feel the UI borrows
+     from openhanako; Bitter for Latin, Noto Serif SC for CJK. */
+  --prose: 'Bitter Variable', 'Noto Serif SC Variable', 'Songti SC', 'Noto Serif CJK SC', serif;
   --font: 'Montserrat Variable', 'Sarasa Gothic SC', system-ui, sans-serif;
   --message-size: 16px;
   --mono: 'Maple Mono NF CN', ui-monospace, monospace;

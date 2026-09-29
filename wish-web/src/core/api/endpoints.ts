@@ -79,6 +79,15 @@ export async function requireAvailableModel(provider: ModelCatalogSource | null 
   } else if (configured) return;
   throw new Error(`Model ID "${id}" is unavailable for provider "${provider.id}". Use the exact upstream ID.`);
 }
+export interface ProviderModelItem {
+  id: string; name: string; owner?: string | null; created_at?: number | null;
+  context_window?: number | null; max_output_tokens?: number | null;
+}
+/// List models for a provider form that has not been saved yet: the draft
+/// configuration (including the freshly typed key) travels in memory only.
+export async function probeProviderModels(draft: unknown, opts?: EndpointOptions): Promise<{ items: ProviderModelItem[]; next_cursor: string | null; warnings?: unknown }> {
+  return post('/providers/models/probe', draft, opts);
+}
 export async function sessionCreate(body: CreateSessionBody) {
   const [{ defaults, session_config }, providers] = await Promise.all([get('/defaults'), get('/providers')]);
   const provider = providers.items.find((p: { id: string }) => p.id === body.provider);

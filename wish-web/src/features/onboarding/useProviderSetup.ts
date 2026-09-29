@@ -1,5 +1,5 @@
 import { computed, onScopeDispose, ref, shallowRef } from 'vue';
-import { get, put } from '../../core/api/client.ts';
+import { get, post, put } from '../../core/api/client.ts';
 import type { ConfigCatalog, ProviderConfig } from '../../core/provider-presets.ts';
 import { errorText } from '../../core/config-editor.ts';
 import { providerReady } from '../../core/providerReadiness.ts';
@@ -18,6 +18,34 @@ export function useProviderSetup({ preview = false } = {}) {
   const choice = ref('custom'), id = ref('custom'), model = ref('');
   const provider = ref<ProviderConfig>(customProvider());
   const preset = computed(() => catalog.value.presets.find(item => item.id === provider.value.preset));
+  const modelOptions = shallowRef<any[]>([]);
+  const fetching = ref(false);
+  const picked = shallowRef<any | null>(null);
+  function clearDraftSecrets(draft: any) {
+    if (draft.api_key === '<redacted>') draft.api_key = null;
+    for (const [field, value] of Object.entries(draft.credentials ?? {})) if (value === '<redacted>') draft.credentials[field] = null;
+    return draft;
+  }
+  async function fetchModels() {
+    if (fetching.value || saving.value) return;
+    fetching.value = true;
+    try {
+      const existing = choice.value.startsWith('existing:') ? choice.value.slice(9) : undefined;
+      const page = existing
+        ? await get('/providers/' + encodeURIComponent(existing) + '/models')
+        : await post('/providers/models/probe', clearDraftSecrets(JSON.parse(JSON.stringify(provider.value))));
+      modelOptions.value = page.items ?? [];
+      if (modelOptions.value.length) toast(tr('拉取到 ' + modelOptions.value.length + ' 个模型。', 'Fetched ' + modelOptions.value.length + ' models.'));
+      else toast(tr('服务没有返回任何模型。', 'The service returned no models.'));
+    } catch (cause) {
+      showError({ title: tr('拉取模型失败', 'Could not fetch models'), error: cause });
+    } finally {
+      fetching.value = false;
+    }
+  }
+  function pickModel(id: string) {
+    picked.value = modelOptions.value.find(item => item.id === id) ?? null;
+  }
   let controller: AbortController | undefined;
   let generation = 0;
   function choose(value: string) {
@@ -89,6 +117,9 @@ export function useProviderSetup({ preview = false } = {}) {
       current.models[selectedModel] ??= {};
       config.providers[name] = current;
       config.defaults.provider = name; config.defaults.model = selectedModel;
+      // Parameter adaptation: when the model came from the provider's own
+      // catalog, honor its reported output ceiling as the session default.
+      if (picked.value?.max_output_tokens) config.defaults.max_output_tokens = picked.value.max_output_tokens;
       config.defaults.reasoning = { ...config.defaults.reasoning, effort: null };
       saving.value = true;
       if (preview) {
@@ -107,5 +138,5 @@ export function useProviderSetup({ preview = false } = {}) {
   }
   void load();
   onScopeDispose(() => { generation++; controller?.abort(); });
-  return { snapshot, catalog, loading, saving, error, choice, id, model, provider, preset, choose, load, save, setSecret, secretValue };
+  return { snapshot, catalog, loading, saving, error, choice, id, model, provider, preset, choose, load, save, setSecret, secretValue, modelOptions, fetching, picked, fetchModels, pickModel };
 }

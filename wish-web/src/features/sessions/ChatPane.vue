@@ -20,6 +20,7 @@ import QueueDock from './QueueDock.vue';
 import InfoPane from './InfoPane.vue';
 import SearchPane from './SearchPane.vue';
 import SessionSettingsPane from './SessionSettingsPane.vue';
+import CapabilitiesPane from './CapabilitiesPane.vue';
 import ModelSettings from './ModelSettings.vue';
 import ReasoningSettings from './ReasoningSettings.vue';
 import { useResolvedEffort } from './useResolvedEffort.ts';
@@ -32,10 +33,18 @@ const router = useRouter();
 const isMobile = useMedia('(max-width: 899px)');
 
 const id = computed(() => route.params.id as string);
-type SessionTab = 'info' | 'search' | 'settings';
+type SessionTab = 'info' | 'search' | 'settings' | 'capabilities';
 const routeTab = computed<SessionTab | null>(() => {
   const n = route.name as string;
-  return n === 'chat-info' ? 'info' : n === 'chat-search' ? 'search' : n === 'chat-settings' ? 'settings' : null;
+  return n === 'chat-info'
+    ? 'info'
+    : n === 'chat-search'
+      ? 'search'
+      : n === 'chat-settings'
+        ? 'settings'
+        : n === 'chat-capabilities'
+          ? 'capabilities'
+          : null;
 });
 const desktopTab = ref<SessionTab | null>(null);
 const tab = computed(() => isMobile.value ? routeTab.value : desktopTab.value);
@@ -127,6 +136,7 @@ const goTab = (t: SessionTab) => {
     <InfoPane v-if="!isMobile && desktopTab === 'info'" @close="desktopTab = null" />
     <SearchPane v-if="!isMobile && desktopTab === 'search'" @close="desktopTab = null" />
     <SessionSettingsPane v-if="!isMobile && desktopTab === 'settings'" @close="desktopTab = null" />
+    <CapabilitiesPane v-if="!isMobile && desktopTab === 'capabilities'" @close="desktopTab = null" />
     <ModelSettings v-if="modelOpen" :session-id="id" @close="modelOpen = false" />
     <ReasoningSettings v-if="reasoningOpen" :session-id="id" @close="reasoningOpen = false" />
   </div>
