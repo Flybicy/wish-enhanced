@@ -26,6 +26,8 @@ import { useComposerHeight } from './useComposerHeight.ts';
 import { useComposerAttachments, type Attachment } from './useComposerAttachments.ts';
 import { useBtwPopup } from './useBtwPopup.ts';
 import { useComposerDrag } from './useComposerDrag.ts';
+import { useSlashPalette } from './useSlashPalette.ts';
+import SlashPalette from './SlashPalette.vue';
 
 const props = defineProps<{
   sessionId: string;
@@ -114,6 +116,17 @@ function setTextOwned(v: string) {
   text.value = v;
   chat.setDraft(v, currentSid.value);
 }
+
+// Codex-style "/" command palette: only on the desktop chat composer, never in
+// the start pane or the mobile BTW draft. Commands act on the session; picking a
+// skill inserts an @mention reference.
+const slash = useSlashPalette({
+  sessionId: computed(() => props.sessionId),
+  enabled: computed(() => !props.mobile && !props.start),
+  text,
+  setText: setTextOwned,
+  focusEditor: () => { void nextTick(() => ta.value?.focus()); },
+});
 function onEditorInput(value: string) {
   if (btwMode.value) btwDraft.value = value;
   else { syncAttachmentTags(text.value, value); setTextOwned(value); }
@@ -275,6 +288,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', interruptWithEscape,
 
 function onKeydown(e: KeyboardEvent) {
   if (e.isComposing || e.keyCode === 229) return;
+  if (!props.mobile && slash.open.value && slash.onKeydown(e)) return;
   if (props.mobile) return;
   if (e.key !== 'Enter') return;
   const plain = !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey;
@@ -331,6 +345,8 @@ const { startComposerDrag, resizeKeys } = useComposerDrag(sizing, height);
       <div v-if="start" class="composer-start-selection"><slot name="selection" /></div>
       <div v-else class="grow" />
     </div>
+    <SlashPalette v-if="!mobile && slash.open.value" :items="slash.items.value" :active="slash.active.value"
+      @choose="slash.choose" @hover="i => slash.active.value = i" />
     <div class="composer-editor">
       <InlineMessageEditor ref="ta" :scope="`${sessionId}:${btwMode}`" :attachments="btwMode ? [] : attachments"
         :placeholder="btwMode ? (i18n.locale.value==='zh'?'顺便问一下…':'By the way…') : running ? i18n.t('chat.placeholderRunning') : i18n.t('chat.placeholder')"
@@ -376,6 +392,7 @@ const { startComposerDrag, resizeKeys } = useComposerDrag(sizing, height);
   </div>
 </template>
 <style scoped>
+.composer { position: relative; }
 .composer-footer-start { margin-right:auto; min-width:0; max-width:calc(100% - 52px); }
 .composer-btw{height:32px;min-height:32px;padding:0 9px;flex:none;font-size:11px;font-weight:700;letter-spacing:.05em;color:var(--fg-subtle)}
 .composer-btw[aria-expanded='true']{background:var(--bg-hover);color:var(--fg)}
