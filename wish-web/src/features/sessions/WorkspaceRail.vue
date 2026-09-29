@@ -16,6 +16,9 @@ const props = defineProps<{ sessionId: string }>();
 
 const snapshot = computed(() => chat.snapshot.value);
 const usage = ref<any>(null);
+const calls = ref<any[]>([]);
+// How many entries (tool calls and messages) the run has walked through.
+const steps = ref(0);
 
 const cwd = computed(() => (snapshot.value?.descriptor as any)?.cwd ?? '');
 const folderName = computed(() => {
@@ -23,6 +26,17 @@ const folderName = computed(() => {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 });
 
+// The foot reads like a tachometer: how many calls, how fast the tokens came
+// back, how much traffic there was, and how much of it the cache served.
+const speed = computed(() => {
+  let output = 0;
+  let elapsed = 0;
+  for (const call of calls.value) {
+    const produced = call?.usage?.output_tokens ?? 0;
+    if (produced > 0 && call?.elapsed_ms) { output += produced; elapsed += call.elapsed_ms; }
+  }
+  return elapsed > 0 ? (output / (elapsed / 1000)) : null;
+});
 const stats = computed(() => {
   const s = usage.value?.statistics;
   const totals = s?.totals?.tokens;
@@ -40,8 +54,17 @@ const stats = computed(() => {
 
 async function load(id: string) {
   if (!id) return;
-  try { usage.value = await get('/sessions/' + encodeURIComponent(id) + '/usage'); }
-  catch { /* the rail is a convenience; a missing endpoint must not break the pane */ }
+  try {
+    const [u, c, e] = await Promise.all([
+      get('/sessions/' + encodeURIComponent(id) + '/usage'),
+      get('/sessions/' + encodeURIComponent(id) + '/calls', { query: { limit: 200 } }),
+      get('/sessions/' + encodeURIComponent(id) + '/entries', { query: { limit: 1 } }),
+    ]);
+    usage.value = u;
+    calls.value = c?.items ?? [];
+    // The last page's cursor is the count of entries before it.
+    steps.value = Number(e?.next ?? e?.start ?? 0) + (e?.items?.length ?? 0);
+  } catch { /* the rail is a convenience; a missing endpoint must not break the pane */ }
 }
 watch(() => props.sessionId, load, { immediate: true });
 
@@ -55,6 +78,13 @@ async function copyPath() {
 // 笺 — the note taped along the rail's foot, opened on demand.
 const noteOpen = ref(prefs.btwRail.value);
 watch(noteOpen, value => prefs.setBtwRail(value));
+// One readable number for total traffic: 3.6k under a million, 78.9M above it.
+const totalTokens = computed(() => {
+  const total = stats.value.input + stats.value.output;
+  if (total >= 1_000_000) return (total / 1_000_000).toFixed(1) + 'M tok';
+  if (total >= 1_000) return (total / 1_000).toFixed(1) + 'k tok';
+  return total + ' tok';
+});
 </script>
 
 <template>
@@ -85,9 +115,13 @@ watch(noteOpen, value => prefs.setBtwRail(value));
     <p class="rail-foot" :title="tr('模型调用与 token 计量', 'Model calls and token meters')">
       <span>{{ stats.calls }} {{ tr('次调用', 'calls') }}</span>
       <span class="sep">·</span>
-      <span>{{ (stats.input / 1000).toFixed(1) }}k in</span>
+      <span>{{ steps }} {{ tr('步', 'steps') }}</span>
+      <template v-if="speed !== null">
+        <span class="sep">·</span>
+        <span>{{ speed.toFixed(1) }} tok/s</span>
+      </template>
       <span class="sep">·</span>
-      <span>{{ (stats.output / 1000).toFixed(1) }}k out</span>
+      <span>{{ totalTokens }}</span>
       <template v-if="stats.cacheHit !== null">
         <span class="sep">·</span>
         <span :class="{ good: stats.cacheHit >= 50 }">{{ tr('缓存命中', 'cache') }} {{ stats.cacheHit }}%</span>
