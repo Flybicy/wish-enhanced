@@ -96,18 +96,28 @@ html[data-theme='dark'] .rail-card { box-shadow: 0 1px 2px rgb(0 0 0 / 18%); }
 @media (hover: hover) { .note-head:hover { color: var(--fg); } }
 .note-head .icon { width: 14px; height: 14px; color: var(--accent); }
 .note-head small { margin-left: auto; font-weight: 400; font-size: 10.5px; color: var(--fg-faint); }
-.note-body { min-height: 260px; max-height: 46vh; overflow-y: auto; padding: 0 12px 12px; }
-/* The head already names the aside, so the inner label would only repeat it;
-   its clear button stays. The log becomes an inset sheet on the card. */
+/* The aside lives inside the rail card, so everything below the head reads as
+   one sheet: no ruled seams, no contrasting log block, no forced void. The
+   input is the anchor — a bordered field on the card that warms on focus. */
+.note-body { display: flex; flex-direction: column; min-height: 0; max-height: 46vh; padding: 0; }
+.note-body :deep(.ask-context) { gap: 0; }
+.note-body :deep(.ask-heading) { padding: 2px 12px 0; justify-content: flex-end; min-height: 0; }
 .note-body :deep(.ask-heading > div) { display: none; }
-.note-body :deep(.ask-log) { padding: 8px 12px 4px; }
-.note-body :deep(.ask-composer) { border-top: 0; background: transparent; padding: 8px 4px 4px; }
-/* The aside's input reads as a field on the card: what is typed sits inside
-   the box, and focus picks up the seal accent. */
+.note-body :deep(.ask-log) { flex: 0 1 auto; background: transparent; padding: 0 12px; }
+.note-body :deep(.ask-log:empty) { display: none; }
+.note-body :deep(.ask-composer) { border-top: 0; background: transparent; padding: 4px 12px 12px; }
 .note-body :deep(.ask-composer textarea) {
   background: var(--bg-inset); border: 1px solid var(--line); border-radius: 10px;
-  padding: 9px 12px; min-height: 64px; line-height: 1.6;
+  padding: 10px 12px; min-height: 76px; line-height: 1.6; font-size: 14px;
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 .note-body :deep(.ask-composer:focus-within) { border-top-color: transparent; }
-.note-body :deep(.ask-composer:focus-within textarea) { border-color: var(--accent); }
+.note-body :deep(.ask-composer:focus-within textarea) {
+  border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+/* The send sits snug under its field, filling with the seal when ready. */
+.note-body :deep(.ask-actions) { min-height: 0; padding-top: 8px; }
+.note-body :deep(.ask-composer .send-btn:not(:disabled):not(.stop)) {
+  background: var(--accent); border-color: var(--accent); color: var(--accent-fg);
+}
 </style>

@@ -366,3 +366,57 @@ fn display_proxy_address(raw: &str) -> (String, bool) {
   url.set_fragment(None);
   (url.to_string(), hidden)
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  // The web provider crosses the wire as snake_case; the settings UI binds these
+  // exact strings, so a rename here is a visible regression (blank dropdown).
+  #[test]
+  fn web_provider_serializes_snake_case() {
+    assert_eq!(json!(WebProvider::DuckDuckGo), json!("duck_duck_go"));
+    assert_eq!(json!(WebProvider::Tavily), json!("tavily"));
+    assert_eq!(json!(WebProvider::Brave), json!("brave"));
+    let back: WebProvider = serde_json::from_value(json!("duck_duck_go")).unwrap();
+    assert!(matches!(back, WebProvider::DuckDuckGo));
+  }
+
+  // The capability sections must default-fill when a config predates them, so an
+  // older config.json still deserializes and the UI has values to bind.
+  #[test]
+  fn capabilities_default_when_absent() {
+    let config: Config = serde_json::from_value(json!({})).unwrap();
+    assert!(config.web.enabled);
+    assert!(matches!(config.web.provider, WebProvider::DuckDuckGo));
+    assert_eq!(config.web.fetch_timeout_secs, 30);
+    assert!(config.skills.enabled && config.skills.dirs.is_empty());
+    assert_eq!(config.memory.observe_after_tokens, 10_000);
+    assert_eq!(config.memory.reflect_after_tokens, 20_000);
+    assert_eq!(config.memory.pool_target_tokens, 6_000);
+    assert!(config.subagents.enabled);
+    assert_eq!(config.subagents.max_concurrent, 10);
+    assert_eq!(config.subagents.max_depth, 2);
+    assert!(config.mcp_servers.is_empty());
+  }
+
+  // deny_unknown_fields protects the round-trip: a typo'd key is rejected rather
+  // than silently dropped, so a saved config never loses settings on reload.
+  #[test]
+  fn unknown_capability_key_is_rejected() {
+    let err = serde_json::from_value::<WebSettings>(json!({ "enabled": true, "provdier": "brave" }));
+    assert!(err.is_err(), "unknown key must be rejected");
+  }
+
+  // The whole document round-trips: default -> JSON -> default, unchanged.
+  #[test]
+  fn config_round_trips_through_json() {
+    let original = Config::default();
+    let value = serde_json::to_value(&original).unwrap();
+    let restored: Config = serde_json::from_value(value).unwrap();
+    assert_eq!(restored.web.fetch_timeout_secs, original.web.fetch_timeout_secs);
+    assert_eq!(restored.subagents.max_depth, original.subagents.max_depth);
+    assert!(matches!(restored.web.provider, WebProvider::DuckDuckGo));
+  }
+}
+
