@@ -53,6 +53,8 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
   let mut version = false;
   // A session to land on directly: --open <id> (or a pasted session URL).
   let mut open: Option<String> = None;
+  // An operator override for the listen port, without editing config.json.
+  let mut port: Option<u16> = None;
   let mut i = 0;
   while i < args.len() {
     match args[i].as_str() {
@@ -70,14 +72,25 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
         open = Some(args.get(i).ok_or("usage: wish --open <session-id>")?.to_owned());
         shell = Shell::Window;
       }
+      "--port" => {
+        i += 1;
+        port = Some(
+          args
+            .get(i)
+            .ok_or("usage: wish --port <port>")?
+            .parse()
+            .map_err(|_| "usage: wish --port <port> (0-65535)")?,
+        );
+      }
       "--version" | "-V" => version = true,
       "--help" | "-h" => {
         cli_out(
-          "wish [--config <config.json>] [--no-window] [--window] [--browser] [--open <session-id>]
+          "wish [--config <config.json>] [--port <port>] [--no-window] [--window] [--browser] [--open <session-id>]
 One HTTP service for providers and sessions, with a web interface.
 
 Without --config, wish looks for config.json beside the executable, then in the
 user's Documents\\Wish folder, generating a default one there on first run.
+--port overrides the listen port from the config for this run only.
 Without other flags wish opens its interface in an application window;
 --no-window serves headless and --browser uses the system browser instead.
 --open jumps straight to one session (the interface opens there instead of the
@@ -105,7 +118,10 @@ session list).
     cli_out(&format!("wish generated a default config at {}\n", config_path.display()));
   }
   let (app, listener) = rt.block_on(async {
-    let config: config::Config = serde_json::from_slice(&tokio::fs::read(&config_path).await?)?;
+    let mut config: config::Config = serde_json::from_slice(&tokio::fs::read(&config_path).await?)?;
+    if let Some(port) = port {
+      config.listen.set_port(port);
+    }
     let app = app::App::open(&config, config_path.clone()).await?;
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
     Ok::<_, Box<dyn std::error::Error>>((app, listener))
