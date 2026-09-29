@@ -57,7 +57,7 @@ const rows = computed(() => [
   { key: 'web', label: tr('Web 检索', 'Web Access'), on: hasWeb.value, detail: hasWeb.value ? tr('搜索 + 抓取 + 缓存', 'search + fetch + cache') : tr('配置中未启用', 'disabled in config') },
   { key: 'snapshots', label: tr('工作区快照', 'Workspace Snapshots'), on: hasSnapshot.value, detail: hasSnapshot.value ? tr('checkpoint / 撤销 / 重做', 'checkpoint / undo / redo') : tr('未检测到项目', 'no project detected') },
   { key: 'skills', label: tr('技能库', 'Skills'), on: hasSkills.value, detail: hasSkills.value ? tr(`已启用${skills.value?.enabled ? '' : '（配置关闭）'}`, `enabled${skills.value?.enabled ? '' : ' (off)'}`) : tr('没有技能目录', 'no skill dirs') },
-  { key: 'memory', label: tr('观察式记忆', 'Observational Memory'), on: hasMemory.value, detail: hasMemory.value ? tr(`观察 ${memory.value?.observe_chars ?? '-'} / 反思 ${memory.value?.reflect_chars ?? '-'}`, `observe ${memory.value?.observe_chars ?? '-'} / reflect ${memory.value?.reflect_chars ?? '-'}`) : tr('配置中未启用', 'disabled in config') },
+  { key: 'memory', label: tr('观察式记忆', 'Observational Memory'), on: hasMemory.value, detail: hasMemory.value ? tr(`观察 ${memory.value?.observe_after_tokens ?? '-'} / 反思 ${memory.value?.reflect_after_tokens ?? '-'} tokens`, `observe ${memory.value?.observe_after_tokens ?? '-'} / reflect ${memory.value?.reflect_after_tokens ?? '-'} tokens`) : tr('配置中未启用', 'disabled in config') },
   { key: 'subagents', label: tr('子代理', 'Subagents'), on: hasSubagents.value, detail: hasSubagents.value ? tr(`并发池 ${subagents.value?.max_concurrent ?? '-'} / 深度 ${subagents.value?.max_depth ?? '-'}`, `pool ${subagents.value?.max_concurrent ?? '-'} / depth ${subagents.value?.max_depth ?? '-'}`) : tr('配置中未启用', 'disabled in config') },
 ]);
 </script>
