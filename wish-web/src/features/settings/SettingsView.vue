@@ -218,7 +218,7 @@ onMounted(load);
             <div class="set-row"><span class="set-label"><span>{{tr('启用','Enabled')}}</span><small>{{tr('关闭后模型不再发起检索','Off: the model stops searching')}}</small></span>
               <SwitchRoot v-model="draft.web.enabled" class="cfg-switch" :aria-label="tr('启用网页检索','Enable web search')"><SwitchThumb class="cfg-switch-thumb"/></SwitchRoot></div>
             <label class="set-row"><span class="set-label"><span>{{tr('检索服务','Search service')}}</span><small>{{tr('duckduckgo 无需密钥；tavily 与 brave 从环境变量读取密钥','duckduckgo needs no key; tavily and brave read theirs from the environment')}}</small></span>
-              <span class="set-number"><select class="input" v-model="draft.web.provider"><option value="duckduckgo">duckduckgo</option><option value="tavily">tavily</option><option value="brave">brave</option></select></span></label>
+              <span class="set-number"><select class="input" v-model="draft.web.provider"><option value="duck_duck_go">DuckDuckGo</option><option value="tavily">Tavily</option><option value="brave">Brave</option></select></span></label>
             <label class="set-row"><span class="set-label"><span>{{tr('读取超时','Fetch timeout')}}</span><small>{{tr('抓取单个网页的最长等待','How long one fetch may wait')}}</small></span>
               <span class="set-number"><em>{{draft.web.fetch_timeout_secs}}s</em><input class="input" type="number" min="1" inputmode="numeric" v-model.number="draft.web.fetch_timeout_secs"/></span></label>
           </div>
