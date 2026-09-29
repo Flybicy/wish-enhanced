@@ -155,6 +155,18 @@ pub async fn probe_models(
   Json(draft): Json<crate::server::provider::ProviderConfig>,
 ) -> Result<Json<Value>, ApiError> {
   app.require_open()?;
+  // A custom provider arrives without a lister kind; infer it from the
+  // protocol so the wizard's picker works for hand-written endpoints too.
+  let mut draft = draft;
+  if draft.model_list.is_none() {
+    draft.model_list = Some(match draft.protocol.as_str() {
+      "anthropic_messages" => "anthropic_models".into(),
+      "google_generate_content" | "google_vertex_generate_content" | "google_interactions" => "google_models".into(),
+      "codex_responses" => "openai_codex_models".into(),
+      "qwen_chat" => "qwen_models".into(),
+      _ => "openai_models".into(),
+    });
+  }
   let path = draft
     .model_list_path
     .clone()

@@ -79,7 +79,7 @@
 .entry-anchor { width: 100%; }
 .entry { padding-bottom: 20px; contain: layout style; }
 .entry.user { display: flex; justify-content: flex-end; align-items: flex-end; gap: 6px; padding-top: 4px; }
-.entry.user .bubble { background: var(--user-bubble); color: var(--user-bubble-fg); border: 0; border-radius: 12px; padding: 12px 16px; max-width: 92%; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--message-size); line-height: 1.8; transition: transform var(--dur) var(--ease-out), background var(--dur) var(--ease-out), box-shadow var(--dur) var(--ease-out); }
+.entry.user .bubble { background: var(--user-bubble); color: var(--user-bubble-fg); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 1px 3px rgb(31 35 28 / 5%); padding: 12px 16px; max-width: 92%; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--message-size); line-height: 1.8; transition: transform var(--dur) var(--ease-out), background var(--dur) var(--ease-out), box-shadow var(--dur) var(--ease-out); }
 .entry.user .bubble.attachment-bubble { background: transparent; padding: 0; border-radius: 0; }
 .entry.user .bubble.image-bubble img { border-radius: 12px; }
 .entry.user .bubble img, .proc-step > img { max-width: 100%; border-radius: var(--radius); margin-top: 8px; display: block; }
@@ -168,6 +168,20 @@
 @media(max-width:899px){.queue-dock{left:12px;right:auto;margin-inline:0;min-width:min(220px,calc(100% - 24px));max-width:min(var(--mobile-content-width),calc(100% - 24px));bottom:6px}.queue-dock.collapsed{left:12px;min-width:40px}.queue-item .btn.icon-only{width:36px;height:36px;min-height:36px}.queue-item{min-height:38px;gap:3px}.queue-position{width:12px}}
 .composer { position: relative; flex: none; min-height: 0; border-top: 1px solid var(--line-strong); background: var(--bg-raised); display: flex; flex-direction: column; }
 .composer.desktop { --composer-send-clearance: 8px; padding: 0 24px 12px; transition: height var(--dur-fast) var(--ease-out); }
+/* The desktop composer floats as a card above the conversation — hanako's
+   composer never glues itself to the window edge. The log column plus breathing
+   room bounds the card; focus warms the hairline. */
+.chat-pane > .composer.desktop {
+  margin: 4px auto 14px;
+  width: min(100% - 32px, calc(var(--max-content) + 56px));
+  padding: 10px 20px 12px;
+  background: var(--bg-overlay);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow-pop);
+}
+.chat-pane > .composer.desktop:focus-within { border-color: var(--accent); }
+.chat-pane > .composer.desktop:focus-within .composer-input { background: none; }
 .resizing-composer .composer.desktop { transition: none; }
 .composer-toolbar { display: flex; align-items: center; flex: none; gap: 8px; padding: 6px 0 0; }
 .composer-toolbar .grow { flex: 1; }
