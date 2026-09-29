@@ -11,6 +11,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { useMedia } from '../../ui/composables/useMedia.ts';
 import SessionList from './SessionList.vue';
 import SessionListToggle from './SessionListToggle.vue';
+import WorkspaceRail from './WorkspaceRail.vue';
 import { prefs } from '../../core/state/prefsSlice.ts';
 import { applySavedListWidth, cancelListResize, onListResizePointerDown } from './listWidth.ts';
 import { i18n } from '../../core/i18n/index.ts';
@@ -19,6 +20,9 @@ const route = useRoute();
 const router = useRouter();
 const isMobile = useMedia('(max-width: 899px)');
 const showList = computed(() => isMobile.value ? route.name === 'all-sessions' : !prefs.sessionListCollapsed.value);
+// The rail belongs to a conversation: without one there is no workspace to show.
+const railSessionId = computed(() => (route.params.id as string) || '');
+const showRail = computed(() => !isMobile.value && prefs.workspaceRail.value && !!railSessionId.value);
 
 watch([isMobile, () => route.name], ([mobile, name]) => {
   if (!mobile && name === 'all-sessions') void router.replace('/sessions');
@@ -43,5 +47,6 @@ onBeforeUnmount(cancelListResize);
         <KeepAlive include="StartChat"><component :is="Component" /></KeepAlive>
       </RouterView>
     </div>
+    <WorkspaceRail v-if="showRail" :session-id="railSessionId" />
   </div>
 </template>

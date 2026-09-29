@@ -4,25 +4,35 @@ import { get } from '../../core/api/client.ts';
 import { tr } from '../../core/i18n/tr.ts';
 import Icon from '../../ui/components/Icon.vue';
 
+const props = defineProps<{ sessionId?: string }>();
 defineEmits<{ close: [] }>();
 
-// Capability surface of the running wish server: MCP servers, skills, memory,
-// subagents and snapshots, all read from the real configuration and tools list.
+// Capability surface of the running wish server: what this session can actually
+// do, plus the MCP servers, memory, skills and subagent settings behind it.
+//
+// The injected tool list lives on the SESSION, not on the global configuration:
+// reading config.config.tools reported every capability as disabled even when
+// the session had web, memory and subagent tools in hand.
 const config = ref<any>(null);
+const session = ref<any>(null);
 const err = ref<string | null>(null);
 
 onMounted(async () => {
   try {
-    config.value = await get('/config');
+    const [globalConfig, snapshot] = await Promise.all([
+      get('/config'),
+      props.sessionId ? get('/sessions/' + encodeURIComponent(props.sessionId)) : Promise.resolve(null),
+    ]);
+    config.value = globalConfig;
+    session.value = snapshot;
   } catch (e: any) {
     err.value = String(e?.message ?? e);
   }
 });
 
-// Tool availability comes from the session snapshot's tool names.
 const toolNames = computed<string[]>(() => {
   try {
-    const tools = config.value?.config?.tools ?? [];
+    const tools = session.value?.status?.config?.tools ?? [];
     return tools.map((tool: any) => tool?.name ?? '').filter(Boolean);
   } catch { return []; }
 });

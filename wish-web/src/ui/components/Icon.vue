@@ -7,7 +7,7 @@ import {
   Image as ImageIcon, Layers, LoaderCircle, MessageCircle, Monitor, Pencil,
   Plus, RefreshCw, Search, Send, Settings, Settings2, Sparkles, Square,
   Sun, Moon, Terminal, Trash2, Wrench, X, Bell, Keyboard, Accessibility,
-  Smartphone, AppWindow, Info, PanelLeft, Paperclip, Languages, TriangleAlert, LogOut,
+  Smartphone, AppWindow, Info, PanelLeft, PanelRight, Paperclip, Languages, TriangleAlert, LogOut,
 } from '@lucide/vue';
 import { computed, type FunctionalComponent } from 'vue';
 
@@ -23,7 +23,7 @@ const ICONS: Record<string, FunctionalComponent> = {
   moon: Moon, terminal: Terminal, 'trash-2': Trash2, wrench: Wrench, x: X,
   bell: Bell, keyboard: Keyboard, accessibility: Accessibility,
   smartphone: Smartphone, 'app-window': AppWindow, info: Info,
-  'panel-left': PanelLeft, paperclip: Paperclip, languages: Languages,
+  'panel-left': PanelLeft, 'panel-right': PanelRight, paperclip: Paperclip, languages: Languages,
   'triangle-alert': TriangleAlert, 'file-diff': FileDiff, save: Save, 'external-link': ExternalLink,
   'log-out': LogOut,
 };

@@ -30,6 +30,11 @@ export default defineConfig({
   plugins: [
     vue(),
     VitePWA({
+      // The interface ships inside the desktop application and its assets are
+      // local files: a precache-first worker only pins the window to an old
+      // build. A self-destroying worker unregisters itself and clears its
+      // caches, so a stale profile heals on the next load.
+      selfDestroying: true,
       registerType: 'prompt',
       injectRegister: false,
       manifest: false,

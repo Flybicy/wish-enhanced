@@ -9,9 +9,12 @@ export const prefs = (() => {
   const showAdvanced = shallowRef(false);
   const notifyOnFailure = shallowRef(false);   // decisions 22: default OFF
   const sessionListCollapsed = shallowRef(false);
+  // The right workspace rail is on by default: a wide window reads better with
+  // the workspace in view, and the toggle remembers the choice either way.
+  const workspaceRail = shallowRef(true);
   const loaded = shallowRef(false);
 
-  const KEYS = { sendOnEnter: 'pref.sendOnEnter', keepAwake: 'pref.keepAwake', showAdvanced: 'pref.showAdvanced', notifyOnFailure: 'pref.notifyOnFailure', sessionListCollapsed: 'pref.sessionListCollapsed' };
+  const KEYS = { sendOnEnter: 'pref.sendOnEnter', keepAwake: 'pref.keepAwake', showAdvanced: 'pref.showAdvanced', notifyOnFailure: 'pref.notifyOnFailure', sessionListCollapsed: 'pref.sessionListCollapsed', workspaceRail: 'pref.workspaceRail' };
 
   function load() {
     const s = platform('storage');
@@ -20,6 +23,7 @@ export const prefs = (() => {
     if (s.get(KEYS.showAdvanced) != null) showAdvanced.value = s.get(KEYS.showAdvanced) === '1';
     if (s.get(KEYS.notifyOnFailure) != null) notifyOnFailure.value = s.get(KEYS.notifyOnFailure) === '1';
     sessionListCollapsed.value = s.get(KEYS.sessionListCollapsed) === '1';
+    if (s.get(KEYS.workspaceRail) != null) workspaceRail.value = s.get(KEYS.workspaceRail) === '1';
     loaded.value = true;
   }
 
@@ -28,13 +32,14 @@ export const prefs = (() => {
   }
 
   return {
-    sendOnEnter, keepAwake, showAdvanced, notifyOnFailure, sessionListCollapsed, loaded,
+    sendOnEnter, keepAwake, showAdvanced, notifyOnFailure, sessionListCollapsed, workspaceRail, loaded,
     load,
     setSendOnEnter(v: boolean) { sendOnEnter.value = v; persist(KEYS.sendOnEnter, sendOnEnter); },
     setKeepAwake(v: boolean) { keepAwake.value = v; persist(KEYS.keepAwake, keepAwake); },
     setShowAdvanced(v: boolean) { showAdvanced.value = v; persist(KEYS.showAdvanced, showAdvanced); },
     setNotifyOnFailure(v: boolean) { notifyOnFailure.value = v; persist(KEYS.notifyOnFailure, notifyOnFailure); },
     setSessionListCollapsed(v: boolean) { sessionListCollapsed.value = v; persist(KEYS.sessionListCollapsed, sessionListCollapsed); },
+    setWorkspaceRail(v: boolean) { workspaceRail.value = v; persist(KEYS.workspaceRail, workspaceRail); },
   };
 })();
 export type PrefsApi = typeof prefs;

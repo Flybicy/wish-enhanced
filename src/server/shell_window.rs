@@ -120,8 +120,12 @@ fn save_placement(path: &Path, hwnd: HWND) {
 }
 
 /// Open the interface window and block until the user closes it.
-pub(crate) fn run(addr: SocketAddr, profile_dir: Option<PathBuf>) -> Result<(), String> {
-  let url = super::host_url(addr);
+pub(crate) fn run(addr: SocketAddr, profile_dir: Option<PathBuf>, open_session: Option<String>) -> Result<(), String> {
+  // The interface uses hash routing, so one session can be addressed directly.
+  let url = match &open_session {
+    Some(id) if !id.is_empty() => format!("{}/#/s/{}", super::host_url(addr), id),
+    _ => super::host_url(addr),
+  };
   log(&format!("window: starting for {url}"));
   let _ = URL.set(url);
   let Some(profile_dir) = profile_dir else {

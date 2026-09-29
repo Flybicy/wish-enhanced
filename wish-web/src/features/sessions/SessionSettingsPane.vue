@@ -78,8 +78,15 @@ function setOwnShell(own: boolean) {
   if (own && !snapshot.value?.descriptor?.shell_command && globalShell.value) shell.value = { program: globalShell.value.program ?? '', args: globalShell.value.args ?? null };
 }
 const useDefaults = () => { compaction.value = structuredClone(defaults.value); };
+// A draft needs real budgets: the session may have none, the global config may
+// have none, and an empty object would fail validation. These are the same
+// defaults a fresh session is expected to use once compaction is switched on.
+function compactionSeed(): Compaction {
+  const base: Compaction = { trigger_tokens: 160000, target_tokens: 60000, segment_tokens: 40000 };
+  return { ...base, ...(defaults.value ?? {}) };
+}
 function setCompaction(enabled: boolean) {
-  compaction.value = enabled ? structuredClone(snapshot.value?.config?.compaction ?? defaults.value) : null;
+  compaction.value = enabled ? structuredClone(snapshot.value?.config?.compaction ?? compactionSeed()) : null;
 }
 const compactTokens = (value: unknown) => typeof value === 'number' && value > 0
   ? new Intl.NumberFormat(i18n.locale.value === 'zh' ? 'zh-CN' : 'en', { notation: 'compact', maximumFractionDigits: 1 }).format(value)

@@ -58,41 +58,44 @@
   --glow-on: 0 0 8px rgb(166 74 51 / 45%);
   color-scheme: light;
 }
+/* Night is hanako's 青夜 (midnight): a deep blue-green paper world instead of
+   neutral gray. The terracotta accent stays — warm crane orange against the
+   cool ink ground is the pairing that makes the dark theme worth using. */
 html[data-theme='dark'] {
-  --bg: #202020;
-  --bg-raised: #292929;
-  --bg-overlay: #303030;
-  --bg-control: #242424;
-  --bg-sunken: #171717;
-  --rail-bg: #111111;
-  --chatbar-bg: #292929;
-  --bg-hover: #393939;
-  --bg-active: #444444;
-  --bg-inset: #1b1b1b;
-  --fg: #efefef;
-  --fg-muted: #c4c4c4;
-  --fg-subtle: #acacac;
-  --fg-faint: #848484;
-  --line: #3d3d3d;
-  --line-strong: #555555;
-  --accent: #df947a;
-  --grad-a: #df947a; --grad-b: #d9a06a; --grad-c: #b99a6a;
+  --bg: #3b4a54;
+  --bg-raised: #445560;
+  --bg-overlay: #4b5a63;
+  --bg-control: #3f4e58;
+  --bg-sunken: #34424b;
+  --rail-bg: #2e3a43;
+  --chatbar-bg: #3f4e58;
+  --bg-hover: #4b5a63;
+  --bg-active: #56666f;
+  --bg-inset: #36434e;
+  --fg: #e1eaf0;
+  --fg-muted: #b7c5ce;
+  --fg-subtle: #a3b5c0;
+  --fg-faint: #7e8f9a;
+  --line: #4c5b66;
+  --line-strong: #5f6f7a;
+  --accent: #e8a184;
+  --grad-a: #e8a184; --grad-b: #dfa878; --grad-c: #c9a06f;
   --grad-soft: linear-gradient(135deg, var(--grad-a), var(--grad-b) 55%, var(--grad-c));
-  --glow-on: 0 0 8px rgb(223 148 122 / 40%);
-  --accent-fg: #291d17;
-  --accent-soft: #42332b;
-  --accent-hover: #efac91;
-  --ok: #96bb9d;
-  --warn: #d9b777;
-  --warn-bg: #363020;
-  --warn-border: #6d5c33;
-  --err: #ffb4ab;
-  --err-bg: #3c2423;
-  --err-border: #75413d;
-  --user-bubble: #303030;
-  --focus-ring: #df947a;
-  --scrim: rgb(0 0 0 / 60%);
-  --shadow-pop: 0 16px 48px rgb(0 0 0 / 28%), 0 2px 8px rgb(0 0 0 / 15%);
+  --glow-on: 0 0 8px rgb(232 161 132 / 42%);
+  --accent-fg: #2b2019;
+  --accent-soft: #55443c;
+  --accent-hover: #f2b79c;
+  --ok: #8cc790;
+  --warn: #dcc084;
+  --warn-bg: #47402c;
+  --warn-border: #7a6a3f;
+  --err: #eab2a0;
+  --err-bg: #4a3230;
+  --err-border: #7d4c46;
+  --user-bubble: #4d5d67;
+  --focus-ring: #e8a184;
+  --scrim: rgb(20 26 30 / 62%);
+  --shadow-pop: 0 18px 52px rgb(12 18 22 / 40%), 0 2px 8px rgb(12 18 22 / 22%);
   color-scheme: dark;
 }
 

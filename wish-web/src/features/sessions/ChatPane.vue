@@ -12,6 +12,8 @@ import { useRoute, useRouter } from 'vue-router';
 import { useMedia } from '../../ui/composables/useMedia.ts';
 import { i18n } from '../../core/i18n/index.ts';
 import { chat } from '../../core/state/chatSlice.ts';
+import { prefs } from '../../core/state/prefsSlice.ts';
+import { tr } from '../../core/i18n/tr.ts';
 import Icon from '../../ui/components/Icon.vue';
 import Menu from '../../ui/components/Menu.vue';
 import ChatLog from './ChatLog.vue';
@@ -114,6 +116,8 @@ const goTab = (t: SessionTab) => {
           :class="{ selected: tab === 'search' }" data-session-panel="search" :aria-pressed="tab === 'search'" @click="goTab('search')"><Icon name="search" /></button></Hint>
         <Hint :text="i18n.t('chatbar.settings')"><button class="btn ghost icon-only" :aria-label="i18n.t('chatbar.settings')"
           :class="{ selected: tab === 'settings' }" data-session-panel="settings" :aria-pressed="tab === 'settings'" @click="goTab('settings')"><Icon name="settings-2" /></button></Hint>
+        <Hint :text="tr('工作区面板', 'Workspace panel')"><button class="btn ghost icon-only" :aria-label="tr('工作区面板', 'Workspace panel')"
+          :class="{ selected: prefs.workspaceRail.value }" :aria-pressed="prefs.workspaceRail.value" @click="prefs.setWorkspaceRail(!prefs.workspaceRail.value)"><Icon name="panel-right" /></button></Hint>
       </template>
       <Menu v-else :items="[
         { key: 'info', label: i18n.t('chatbar.info') },
@@ -136,7 +140,7 @@ const goTab = (t: SessionTab) => {
     <InfoPane v-if="!isMobile && desktopTab === 'info'" @close="desktopTab = null" />
     <SearchPane v-if="!isMobile && desktopTab === 'search'" @close="desktopTab = null" />
     <SessionSettingsPane v-if="!isMobile && desktopTab === 'settings'" @close="desktopTab = null" />
-    <CapabilitiesPane v-if="!isMobile && desktopTab === 'capabilities'" @close="desktopTab = null" />
+    <CapabilitiesPane v-if="!isMobile && desktopTab === 'capabilities'" :session-id="id" @close="desktopTab = null" />
     <ModelSettings v-if="modelOpen" :session-id="id" @close="modelOpen = false" />
     <ReasoningSettings v-if="reasoningOpen" :session-id="id" @close="reasoningOpen = false" />
   </div>

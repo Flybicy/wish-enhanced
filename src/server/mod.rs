@@ -50,6 +50,8 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
   // A bare double-click opens the application window; any argument means an operator is present.
   let mut shell = if args.is_empty() { Shell::Window } else { Shell::Headless };
   let mut version = false;
+  // A session to land on directly: --open <id> (or a pasted session URL).
+  let mut open: Option<String> = None;
   let mut i = 0;
   while i < args.len() {
     match args[i].as_str() {
@@ -62,16 +64,23 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
       "--no-window" | "--no-browser" => shell = Shell::Headless,
       "--window" => shell = Shell::Window,
       "--browser" => shell = Shell::Browser,
+      "--open" => {
+        i += 1;
+        open = Some(args.get(i).ok_or("usage: wish --open <session-id>")?.to_owned());
+        shell = Shell::Window;
+      }
       "--version" | "-V" => version = true,
       "--help" | "-h" => {
         cli_out(
-          "wish [--config <config.json>] [--no-window] [--window] [--browser]
+          "wish [--config <config.json>] [--no-window] [--window] [--browser] [--open <session-id>]
 One HTTP service for providers and sessions, with a web interface.
 
 Without --config, wish looks for config.json beside the executable, then in the
 user's Documents\\Wish folder, generating a default one there on first run.
 Without other flags wish opens its interface in an application window;
 --no-window serves headless and --browser uses the system browser instead.
+--open jumps straight to one session (the interface opens there instead of the
+session list).
 ",
         );
         return Ok(());
@@ -117,7 +126,7 @@ Without other flags wish opens its interface in an application window;
           if let Some(dir) = &profile {
             let _ = std::fs::create_dir_all(dir);
           }
-          match shell_window::run(addr, profile) {
+          match shell_window::run(addr, profile, open.clone()) {
             Ok(()) => std::process::exit(0),
             Err(error) => {
               let text = format!("wish could not open its window: {error}\n");
