@@ -6,9 +6,11 @@ import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useVirtualizer } from '@tanstack/vue-virtual';
 import { cfg } from '../../core/config.ts';
-import { sessions } from '../../core/state/sessionsSlice.ts';
+import { sessions, groupByWorkspace } from '../../core/state/sessionsSlice.ts';
+import { prefs } from '../../core/state/prefsSlice.ts';
 import { i18n } from '../../core/i18n/index.ts';
 import SessionListRow from './SessionListRow.vue';
+import SessionListGroupHeader from './SessionListGroupHeader.vue';
 import SessionListAction from './SessionListAction.vue';
 import Icon from '../../ui/components/Icon.vue';
 import Spinner from '../../ui/components/Spinner.vue';
@@ -22,6 +24,24 @@ const listEl = ref<HTMLElement | null>(null);
 
 const action = ref<{ target: { id: string; name?: string }; kind: 'rename' | 'tags' | 'delete' } | null>(null);
 const rows = computed(() => sessions.items.value);
+// The virtual list walks one flat sequence: a heading followed by its rows.
+// Collapsing a workspace simply leaves its rows out of that sequence.
+type ListEntry = { key: string; kind: 'head'; cwd: string; name: string; count: number; collapsed: boolean } | { key: string; kind: 'row'; row: any };
+const collapsed = ref<Set<string>>(new Set());
+function toggleWorkspace(cwd: string) {
+  const next = new Set(collapsed.value);
+  if (next.has(cwd)) next.delete(cwd); else next.add(cwd);
+  collapsed.value = next;
+}
+const entries = computed<ListEntry[]>(() => {
+  const list: ListEntry[] = [];
+  if (!prefs.groupSessions.value) return rows.value.map(row => ({ key: row.id, kind: 'row' as const, row }));
+  for (const group of groupByWorkspace(rows.value)) {
+    list.push({ key: 'ws:' + group.cwd, kind: 'head', cwd: group.cwd, name: group.name, count: group.rows.length, collapsed: collapsed.value.has(group.cwd) });
+    if (!collapsed.value.has(group.cwd)) for (const row of group.rows) list.push({ key: row.id, kind: 'row', row });
+  }
+  return list;
+});
 const rearranging = ref(false);
 let motionTimer: ReturnType<typeof setTimeout>;
 // Rearrange motion triggers on an id-set change; building the full joined
@@ -41,11 +61,11 @@ watch(query, (q) => { if (!composing.value) sessions.setQuery(q); });
 
 const virtualizer = useVirtualizer(
   computed(() => ({
-    count: rows.value.length,
+    count: entries.value.length,
     getScrollElement: () => listEl.value,
     estimateSize: () => cfg.design.sessionRowHeight + cfg.design.sessionRowGap,
     overscan: 8,
-    getItemKey: (i: number) => rows.value[i]?.id ?? `i${i}`,
+    getItemKey: (i: number) => entries.value[i]?.key ?? `i${i}`,
   })),
 );
 
@@ -98,11 +118,15 @@ onMounted(() => { if (!rows.value.length && !sessions.loading.value) sessions.lo
       </div>
       <div v-else-if="!rows.length" class="sl-state hint">{{ i18n.t('sessions.empty') }}</div>
       <TransitionGroup tag="div" name="session-filter" :css="rearranging" :class="{ rearranging }" :style="{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }">
-        <div v-for="v in virtualizer.getVirtualItems()" :key="rows[v.index]?.id"
+        <div v-for="v in virtualizer.getVirtualItems()" :key="entries[v.index]?.key"
           :ref="(el) => el && virtualizer.measureElement(el as HTMLElement)" :data-index="v.index"
           :style="{ position: 'absolute', top: 0, left: 0, width: '100%', paddingBottom: `${cfg.design.sessionRowGap}px`, transform: `translateY(${v.start}px)` }">
-          <SessionListRow :row="rows[v.index]" :index="v.index" :active="rows[v.index]?.id === activeId"
-            @action="kind => action = { target: { id: rows[v.index]!.id, name: rows[v.index]!.name }, kind }" />
+          <SessionListGroupHeader v-if="entries[v.index]?.kind === 'head'" :cwd="(entries[v.index] as any).cwd"
+            :name="(entries[v.index] as any).name" :count="(entries[v.index] as any).count"
+            :collapsed="(entries[v.index] as any).collapsed" @toggle="toggleWorkspace((entries[v.index] as any).cwd)" />
+          <SessionListRow v-else :row="(entries[v.index] as any).row" :index="v.index"
+            :active="(entries[v.index] as any).row?.id === activeId"
+            @action="kind => action = { target: { id: (entries[v.index] as any).row.id, name: (entries[v.index] as any).row.name }, kind }" />
         </div>
       </TransitionGroup>
     </div>

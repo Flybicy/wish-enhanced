@@ -167,9 +167,9 @@ async function send(text: string, attachments: AttachmentInput[]) {
 .start-chat { height: 100%; min-height: 0; overflow: auto; display: flex; align-items: center; justify-content: center; padding: 32px clamp(24px, 5vw, 80px); position: relative; }
 .start-surface { width: 100%; max-width: 740px; margin-block: auto; padding-block: 24px 12vh; }
 .start-brand { display: flex; align-items: center; gap: 16px; margin-bottom: 28px; }
-.start-mark { display: block; width: 64px; height: auto; filter: drop-shadow(0 2px 10px rgb(166 74 51 / 25%)); }
+.start-mark { display: block; width: 64px; height: auto; filter: drop-shadow(0 2px 10px rgb(83 125 150 / 22%)); }
 .start-wordmark { height: 36px; color: var(--fg); }
-.start-tagline { margin: -20px 0 24px; font: 500 14px/1.6 var(--font); color: var(--fg-subtle); background: var(--grad-soft); -webkit-background-clip: text; background-clip: text; color: transparent; width: fit-content; }
+.start-tagline { margin: -20px 0 24px; font: 500 15px/1.7 var(--prose); color: var(--fg-subtle); background: var(--grad-soft); -webkit-background-clip: text; background-clip: text; color: transparent; width: fit-content; letter-spacing: .02em; }
 .start-model-controls { display: inline-flex; width: max-content; max-width: 100%; align-items: center; min-width: 0; gap: 3px; }
 .start-model-controls button { font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .start-model-controls .model-chip { flex: 0 1 auto; max-width: min(38vw, 320px); }

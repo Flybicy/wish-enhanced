@@ -183,6 +183,9 @@ pub(crate) fn run(addr: SocketAddr, profile_dir: Option<PathBuf>, open_session: 
       return Err("creating the window failed".into());
     }
     WINDOW.store(window, Ordering::SeqCst);
+    // The frame belongs to the paper: ask DWM for a caption in the light
+    // theme colour instead of the system accent. Best effort.
+    super::caption::tint(window);
     // Remembered geometry, or a sensible first show.
     match load_placement(PLACEMENT_PATH.get().expect("placement path set")) {
       Some(mut placement) => {

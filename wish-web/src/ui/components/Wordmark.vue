@@ -19,6 +19,6 @@
 .wordmark { display: block; width: auto; }
 .front { fill: currentColor; }
 .back { fill: var(--accent); }
-.dot-light { fill: #eea07c; }
-.dot-dark { fill: #c9653f; }
+.dot-light { fill: #9BBCCE; }
+.dot-dark { fill: #537D96; }
 </style>

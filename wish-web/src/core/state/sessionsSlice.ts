@@ -30,7 +30,46 @@ import type { SessionUpsert, SessionTombstone } from './syncSlice.ts';
 
 // One sessions-list row: the list-facing fields of a session snapshot. Rows
 // fetched from GET /sessions carry the whole snapshot; locally built ones only these.
-export type SessionRow = Pick<SessionView, 'id' | 'name' | 'phase' | 'created_at_ms' | 'updated_at_ms' | 'pending_items' | 'revision' | 'resume_requires_user' | 'metadata'>;
+export type SessionRow = Pick<SessionView, 'id' | 'name' | 'phase' | 'created_at_ms' | 'updated_at_ms' | 'pending_items' | 'revision' | 'resume_requires_user' | 'metadata' | 'descriptor'>;
+
+// A workspace groups the sessions that share one working directory. The list
+// reads as projects because a directory is the closest thing this application
+// has to a project: sessions started in the same folder belong together, while
+// a session whose folder is unknown stands on its own.
+export interface SessionWorkspace {
+  /// Working directory, or '' for sessions that run without one.
+  cwd: string;
+  /// Last path segment, the name a reader recognises.
+  name: string;
+  rows: SessionRow[];
+}
+
+export function workspaceOf(row: { descriptor?: any } | null | undefined): string {
+  const cwd = row?.descriptor?.cwd;
+  return typeof cwd === 'string' ? cwd : '';
+}
+
+export function workspaceName(cwd: string): string {
+  const trimmed = cwd.replace(/[\\/]+$/, '');
+  return trimmed.split(/[\\/]/).filter(Boolean).pop() ?? trimmed;
+}
+
+/// Group rows into workspaces, preserving the list's own order (newest first)
+/// both between groups and inside them. A session without a directory forms its
+/// own unnamed group rather than being hidden.
+export function groupByWorkspace(rows: SessionRow[]): SessionWorkspace[] {
+  const groups = new Map<string, SessionWorkspace>();
+  for (const row of rows) {
+    const cwd = workspaceOf(row);
+    let group = groups.get(cwd);
+    if (!group) {
+      group = { cwd, name: cwd ? workspaceName(cwd) : '', rows: [] };
+      groups.set(cwd, group);
+    }
+    group.rows.push(row);
+  }
+  return [...groups.values()];
+}
 // Opaque server pagination token, bound to the current filter + sort.
 export type SessionsCursor = NonNullable<SessionsListParams['cursor']>;
 export interface SessionCreateInput { name?: string; provider: string; model: string; reasoningEffort?: string; agentCustom?: string; cwd?: string }
@@ -253,6 +292,8 @@ function snapToListRow(snap: SessionView): SessionRow {
     pending_items: snap.queue ?? 0,
     revision: snap.revision, resume_requires_user: snap.resume_requires_user,
     metadata: snap.metadata,
+    // The descriptor carries the working directory the list groups by.
+    descriptor: snap.descriptor,
   };
 }
 
@@ -265,5 +306,7 @@ function sessionRowFromSync(body: SessionView): Partial<SessionRow> {
   if (body.updated_at) row.updated_at_ms = body.updated_at;
   if (body.updated_at_ms) row.updated_at_ms = body.updated_at_ms;
   if (body.queue !== undefined) row.pending_items = body.queue;
+  // Grouping depends on the working directory, so a sync frame carries it too.
+  if (body.descriptor !== undefined) row.descriptor = body.descriptor;
   return row;
 }

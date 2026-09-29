@@ -1,35 +1,35 @@
-/* Warm paper in light mode; neutral gray in dark mode. Shared surface roles keep the same hierarchy. Geometry is supplied by applyTokens from cfg.design. */
+/* hanako 新暖纸 by day and 青夜 by night: one paper, one seal, one ink scale. Geometry is supplied by applyTokens from cfg.design. */
 :root {
-  --bg: #eee9df;
-  --bg-raised: #f5f1e8;
-  --bg-overlay: #faf6ed;
-  --bg-control: #eee9df;
-  --bg-sunken: #e4ded2;
-  --rail-bg: #d6cebf;
-  --chatbar-bg: #e4ded2;
-  --bg-hover: #e5ded1;
-  --bg-active: #d9d0c0;
-  --bg-inset: #e8e1d5;
-  --fg: #302d28;
-  --fg-muted: #575148;
-  --fg-subtle: #71695e;
-  --fg-faint: #938a7c;
-  --line: #d9d1c3;
-  --line-strong: #b9af9f;
-  --accent: #a64a33;
+  --bg: #F5EFE4;
+  --bg-raised: #FBF7EE;
+  --bg-overlay: #FFFCF5;
+  --bg-control: #F5EFE4;
+  --bg-sunken: #EFE8DB;
+  --rail-bg: #EFE8DB;
+  --chatbar-bg: #EFE8DB;
+  --bg-hover: #EBE4D6;
+  --bg-active: #E3DBCB;
+  --bg-inset: #F1EADE;
+  --fg: #2A2622;
+  --fg-muted: #4A433C;
+  --fg-subtle: #6B6158;
+  --fg-faint: #8F867B;
+  --line: #D8CFBE;
+  --line-strong: #C4B9A5;
+  --accent: #537D96;
   --accent-fg: #fffaf5;
-  --accent-soft: #f3e6df;
-  --accent-hover: #8e3b27;
-  --ok: #4e715b;
+  --accent-soft: #E8EFF3;
+  --accent-hover: #3F6179;
+  --ok: #4A6B4F;
   --warn: #8d672a;
   --warn-bg: #fdf5e4;
   --warn-border: #e2ce9c;
-  --err: #a32d2d;
+  --err: #8B2C1F;
   --err-bg: #fff0ef;
   --err-border: #e7b7b3;
-  --user-bubble: #ece3d3;
+  --user-bubble: #E9F0F4;
   --user-bubble-fg: var(--fg);
-  --focus-ring: #a64a33;
+  --focus-ring: #537D96;
   --scrim: rgb(18 18 16 / 32%);
   --shadow-pop: 0 16px 48px rgb(31 35 28 / 12%), 0 2px 8px rgb(31 35 28 / 5%);
   --shadow-card: none;
@@ -52,10 +52,10 @@
   --max-content: 46rem;
   --dur-fast: 140ms; --dur: 240ms; --dur-slow: 400ms;
   --ease-out: cubic-bezier(.2,.8,.2,1);
-  /* Aurora accent ramp: capability surfaces and gradient highlights. */
-  --grad-a: #a64a33; --grad-b: #b8703f; --grad-c: #8d6a3f;
+  /* Capability ramp: one seal-blue family, no second hue fighting the paper. */
+  --grad-a: #537D96; --grad-b: #6B93A8; --grad-c: #86A8B8;
   --grad-soft: linear-gradient(135deg, var(--grad-a), var(--grad-b) 55%, var(--grad-c));
-  --glow-on: 0 0 8px rgb(166 74 51 / 45%);
+  --glow-on: 0 0 8px rgb(83 125 150 / 30%);
   color-scheme: light;
 }
 /* Night is hanako's 青夜 (midnight): a deep blue-green paper world instead of
@@ -78,22 +78,22 @@ html[data-theme='dark'] {
   --fg-faint: #7e8f9a;
   --line: #4c5b66;
   --line-strong: #5f6f7a;
-  --accent: #e8a184;
-  --grad-a: #e8a184; --grad-b: #dfa878; --grad-c: #c9a06f;
+  --accent: #C99AAF;
+  --grad-a: #C99AAF; --grad-b: #D8AFC0; --grad-c: #B98FA6;
   --grad-soft: linear-gradient(135deg, var(--grad-a), var(--grad-b) 55%, var(--grad-c));
-  --glow-on: 0 0 8px rgb(232 161 132 / 42%);
-  --accent-fg: #2b2019;
-  --accent-soft: #55443c;
-  --accent-hover: #f2b79c;
+  --glow-on: 0 0 8px rgb(201 154 175 / 40%);
+  --accent-fg: #2A2226;
+  --accent-soft: #4E414A;
+  --accent-hover: #D8AFC0;
   --ok: #8cc790;
   --warn: #dcc084;
   --warn-bg: #47402c;
   --warn-border: #7a6a3f;
-  --err: #eab2a0;
+  --err: #E4A2A2;
   --err-bg: #4a3230;
   --err-border: #7d4c46;
   --user-bubble: #4d5d67;
-  --focus-ring: #e8a184;
+  --focus-ring: #C99AAF;
   --scrim: rgb(20 26 30 / 62%);
   --shadow-pop: 0 18px 52px rgb(12 18 22 / 40%), 0 2px 8px rgb(12 18 22 / 22%);
   color-scheme: dark;

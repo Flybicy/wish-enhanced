@@ -15,9 +15,12 @@ export const prefs = (() => {
   // The rail's note panel starts closed: it is a place to jot an aside, not a
   // panel that should claim space before it is wanted.
   const btwRail = shallowRef(false);
+  // Sessions group by working directory by default: one folder is the closest
+  // thing this application has to a project, and the list reads better for it.
+  const groupSessions = shallowRef(true);
   const loaded = shallowRef(false);
 
-  const KEYS = { sendOnEnter: 'pref.sendOnEnter', keepAwake: 'pref.keepAwake', showAdvanced: 'pref.showAdvanced', notifyOnFailure: 'pref.notifyOnFailure', sessionListCollapsed: 'pref.sessionListCollapsed', workspaceRail: 'pref.workspaceRail', btwRail: 'pref.btwRail' };
+  const KEYS = { sendOnEnter: 'pref.sendOnEnter', keepAwake: 'pref.keepAwake', showAdvanced: 'pref.showAdvanced', notifyOnFailure: 'pref.notifyOnFailure', sessionListCollapsed: 'pref.sessionListCollapsed', workspaceRail: 'pref.workspaceRail', btwRail: 'pref.btwRail', groupSessions: 'pref.groupSessions' };
 
   function load() {
     const s = platform('storage');
@@ -27,6 +30,7 @@ export const prefs = (() => {
     if (s.get(KEYS.notifyOnFailure) != null) notifyOnFailure.value = s.get(KEYS.notifyOnFailure) === '1';
     sessionListCollapsed.value = s.get(KEYS.sessionListCollapsed) === '1';
     if (s.get(KEYS.workspaceRail) != null) workspaceRail.value = s.get(KEYS.workspaceRail) === '1';
+    if (s.get(KEYS.groupSessions) != null) groupSessions.value = s.get(KEYS.groupSessions) === '1';
     loaded.value = true;
   }
 
@@ -35,7 +39,7 @@ export const prefs = (() => {
   }
 
   return {
-    sendOnEnter, keepAwake, showAdvanced, notifyOnFailure, sessionListCollapsed, workspaceRail, btwRail, loaded,
+    sendOnEnter, keepAwake, showAdvanced, notifyOnFailure, sessionListCollapsed, workspaceRail, btwRail, groupSessions, loaded,
     load,
     setSendOnEnter(v: boolean) { sendOnEnter.value = v; persist(KEYS.sendOnEnter, sendOnEnter); },
     setKeepAwake(v: boolean) { keepAwake.value = v; persist(KEYS.keepAwake, keepAwake); },
@@ -44,6 +48,7 @@ export const prefs = (() => {
     setSessionListCollapsed(v: boolean) { sessionListCollapsed.value = v; persist(KEYS.sessionListCollapsed, sessionListCollapsed); },
     setWorkspaceRail(v: boolean) { workspaceRail.value = v; persist(KEYS.workspaceRail, workspaceRail); },
     setBtwRail(v: boolean) { btwRail.value = v; persist(KEYS.btwRail, btwRail); },
+    setGroupSessions(v: boolean) { groupSessions.value = v; persist(KEYS.groupSessions, groupSessions); },
   };
 })();
 export type PrefsApi = typeof prefs;
