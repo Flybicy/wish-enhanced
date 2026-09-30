@@ -258,9 +258,9 @@ onMounted(load);
             <div class="set-row"><span class="set-label"><span>{{tr('内置目录','Built-in directory')}}</span><small>{{builtinSkillsDir || '—'}} · {{builtinSkillCount}}</small></span></div>
             <button type="button" class="btn ghost skills-dir-add" @click="draft.skills.dirs.push('')"><Icon name="plus"/>{{tr('添加目录','Add directory')}}</button>
             <div class="set-row skills-install">
-              <span class="set-label"><span>{{tr('从 URL 安装','Install from URL')}}</span><small>{{tr('抓取 http(s) 上的 markdown 技能文件，落到所选目录','Fetch a markdown skill over http(s) into the chosen directory')}}</small></span>
+              <span class="set-label"><span>{{tr('从 URL 安装','Install from URL')}}</span><small>{{tr('抓取 http(s) 上的 markdown 技能文件或 zip 归档（含 SKILL.md 的技能文件夹），落到所选目录','Fetch a markdown skill or a .zip archive (a folder with SKILL.md) over http(s) into the chosen directory')}}</small></span>
               <span class="set-number skills-install-controls">
-                <input class="input" v-model="installUrl" type="url" placeholder="https://…/skill.md" autocomplete="off" autocapitalize="off" spellcheck="false" @keydown.enter.prevent="installSkill"/>
+                <input class="input" v-model="installUrl" type="url" placeholder="https://…/skill.md · https://…/skill.zip" autocomplete="off" autocapitalize="off" spellcheck="false" @keydown.enter.prevent="installSkill"/>
                 <select class="input" v-model="installTarget" :aria-label="tr('目标目录','Target directory')">
                   <option value="">{{tr('内置目录','Built-in directory')}}</option>
                   <option v-for="(dir, i) in draft.skills.dirs" :key="i" :value="dir">{{dir || tr('（空目录）','(empty)')}}</option>
