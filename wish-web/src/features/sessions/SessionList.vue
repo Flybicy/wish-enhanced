@@ -6,9 +6,11 @@ import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useVirtualizer } from '@tanstack/vue-virtual';
 import { cfg } from '../../core/config.ts';
-import { sessions, groupByWorkspace } from '../../core/state/sessionsSlice.ts';
+import { sessions, groupByWorkspace, metaOf, ARCHIVED_WORKSPACE } from '../../core/state/sessionsSlice.ts';
 import { prefs } from '../../core/state/prefsSlice.ts';
 import { i18n } from '../../core/i18n/index.ts';
+import { tr } from '../../core/i18n/tr.ts';
+import { useRowActions } from './useRowActions.ts';
 import SessionListRow from './SessionListRow.vue';
 import SessionListGroupHeader from './SessionListGroupHeader.vue';
 import SessionListAction from './SessionListAction.vue';
@@ -22,12 +24,12 @@ const query = ref(sessions.query.value);
 const composing = ref(false);
 const listEl = ref<HTMLElement | null>(null);
 
-const action = ref<{ target: { id: string; name?: string }; kind: 'rename' | 'tags' | 'delete' } | null>(null);
+const action = ref<{ target: { id: string; name?: string; cwd?: string; rows?: any[] }; kind: 'rename' | 'tags' | 'delete' | 'rename-project' | 'delete-project' } | null>(null);
 const rows = computed(() => sessions.items.value);
 // The virtual list walks one flat sequence: a heading followed by its rows.
 // Collapsing a workspace simply leaves its rows out of that sequence.
-type ListEntry = { key: string; kind: 'head'; cwd: string; name: string; count: number; collapsed: boolean } | { key: string; kind: 'row'; row: any };
-const collapsed = ref<Set<string>>(new Set());
+type ListEntry = { key: string; kind: 'head'; cwd: string; name: string; count: number; collapsed: boolean; archived: boolean; menu: boolean; rows: any[] } | { key: string; kind: 'row'; row: any };
+const collapsed = ref<Set<string>>(new Set([ARCHIVED_WORKSPACE]));   // archived starts closed
 function toggleWorkspace(cwd: string) {
   const next = new Set(collapsed.value);
   if (next.has(cwd)) next.delete(cwd); else next.add(cwd);
@@ -35,13 +37,30 @@ function toggleWorkspace(cwd: string) {
 }
 const entries = computed<ListEntry[]>(() => {
   const list: ListEntry[] = [];
-  if (!prefs.groupSessions.value) return rows.value.map(row => ({ key: row.id, kind: 'row' as const, row }));
+  // Ungrouped mode: archived rows still sink to the bottom.
+  if (!prefs.groupSessions.value) {
+    const live = rows.value.filter(row => !metaOf(row).archived);
+    const dead = rows.value.filter(row => metaOf(row).archived);
+    return [...live, ...dead].map(row => ({ key: row.id, kind: 'row' as const, row }));
+  }
   for (const group of groupByWorkspace(rows.value)) {
-    list.push({ key: 'ws:' + group.cwd, kind: 'head', cwd: group.cwd, name: group.name, count: group.rows.length, collapsed: collapsed.value.has(group.cwd) });
+    const isArchived = !!group.archived;
+    list.push({ key: 'ws:' + group.cwd, kind: 'head', cwd: group.cwd, name: group.archived ? tr('已归档', 'Archived') : group.name, count: group.rows.length, collapsed: collapsed.value.has(group.cwd), archived: isArchived, menu: !!group.cwd && !isArchived, rows: group.rows });
     if (!collapsed.value.has(group.cwd)) for (const row of group.rows) list.push({ key: row.id, kind: 'row', row });
   }
   return list;
 });
+// Direct row actions (pin, archive, branch) are shared with the start page's
+// recent list; the composable owns the API call, toast and error dialog.
+const { runRowAction } = useRowActions();
+const MODAL_KINDS = new Set(['rename', 'tags', 'delete']);
+function onRowAction(row: any, kind: string) {
+  if (MODAL_KINDS.has(kind)) action.value = { target: { id: row.id, name: row.name }, kind: kind as 'rename' | 'tags' | 'delete' };
+  else void runRowAction(row, kind);
+}
+function onGroupAction(entry: any, kind: 'rename-project' | 'delete-project') {
+  action.value = { target: { id: '', name: entry.name, cwd: entry.cwd, rows: entry.rows }, kind };
+}
 const rearranging = ref(false);
 let motionTimer: ReturnType<typeof setTimeout>;
 // Rearrange motion triggers on an id-set change; building the full joined
@@ -123,10 +142,13 @@ onMounted(() => { if (!rows.value.length && !sessions.loading.value) sessions.lo
           :style="{ position: 'absolute', top: 0, left: 0, width: '100%', paddingBottom: `${cfg.design.sessionRowGap}px`, transform: `translateY(${v.start}px)` }">
           <SessionListGroupHeader v-if="entries[v.index]?.kind === 'head'" :cwd="(entries[v.index] as any).cwd"
             :name="(entries[v.index] as any).name" :count="(entries[v.index] as any).count"
-            :collapsed="(entries[v.index] as any).collapsed" @toggle="toggleWorkspace((entries[v.index] as any).cwd)" />
+            :collapsed="(entries[v.index] as any).collapsed" :menu="(entries[v.index] as any).menu"
+            @toggle="toggleWorkspace((entries[v.index] as any).cwd)"
+            @rename="onGroupAction(entries[v.index], 'rename-project')"
+            @delete="onGroupAction(entries[v.index], 'delete-project')" />
           <SessionListRow v-else :row="(entries[v.index] as any).row" :index="v.index"
             :active="(entries[v.index] as any).row?.id === activeId"
-            @action="kind => action = { target: { id: (entries[v.index] as any).row.id, name: (entries[v.index] as any).row.name }, kind }" />
+            @action="kind => onRowAction((entries[v.index] as any).row, kind)" />
         </div>
       </TransitionGroup>
     </div>

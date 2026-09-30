@@ -4,12 +4,13 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import * as api from '../../core/api/endpoints.ts';
-import { sessions } from '../../core/state/sessionsSlice.ts';
+import { sessions, metaOf } from '../../core/state/sessionsSlice.ts';
 import { chat } from '../../core/state/chatSlice.ts';
 import { i18n } from '../../core/i18n/index.ts';
+import { tr } from '../../core/i18n/tr.ts';
 import Modal from '../../ui/components/Modal.vue';
 import Icon from '../../ui/components/Icon.vue';
-const props = defineProps<{ target: { id: string; name?: string }; kind: 'rename' | 'tags' | 'delete' }>();
+const props = defineProps<{ target: { id: string; name?: string; cwd?: string; rows?: any[] }; kind: 'rename' | 'tags' | 'delete' | 'rename-project' | 'delete-project' }>();
 const emit = defineEmits<{ close: [] }>();
 const router = useRouter();
 const snapshot = ref<any>();
@@ -17,10 +18,14 @@ const name = ref(props.target.name || '');
 const tags = ref<string[]>([]);
 const tagInput = ref('');
 const busy = ref(false);
+// Project dialogs have no i18n keys of their own; session ones stay keyed.
+const title = computed(() => props.kind === 'rename-project' ? tr('重命名项目', 'Rename project')
+  : props.kind === 'delete-project' ? tr('删除项目', 'Delete project')
+  : i18n.t(`manage.${props.kind}`));
 const loading = ref(props.kind === 'tags');
 const error = ref('');
 const draftTags = computed(() => [...new Set([...tags.value, ...(tagInput.value.trim() ? [tagInput.value.trim()] : [])])]);
-const changed = computed(() => props.kind === 'rename' ? name.value.trim() !== (props.target.name || '')
+const changed = computed(() => props.kind === 'rename' || props.kind === 'rename-project' ? name.value.trim() !== (props.target.name || '')
   : props.kind === 'tags' ? JSON.stringify(draftTags.value) !== JSON.stringify(snapshot.value?.metadata?.tags ?? []) : true);
 const canSave = computed(() => !busy.value && !loading.value && changed.value && (props.kind !== 'rename' || !!name.value.trim())
   && (props.kind !== 'tags' || (!!snapshot.value && draftTags.value.length <= 16 && draftTags.value.every(tag => [...tag].length <= 64))));
@@ -45,10 +50,22 @@ async function save() {
   busy.value = true;
   error.value = '';
   try {
-    if (props.kind === 'delete') {
-      await api.sessionDelete(id);
-      sessions.dropRow(id);
-      if (chat.sessionId.value === id) { chat.close(); await router.push('/sessions'); }
+    if (props.kind === 'delete' || props.kind === 'delete-project') {
+      const ids = props.kind === 'delete' ? [id] : (props.target.rows ?? []).map((row: any) => row.id);
+      for (const victim of ids) {
+        await api.sessionDelete(victim);
+        sessions.dropRow(victim);
+        if (chat.sessionId.value === victim) { chat.close(); await router.push('/sessions'); }
+      }
+    } else if (props.kind === 'rename-project') {
+      // A project rename is a pure metadata write; the folder on disk is
+      // never touched. An empty label clears the override, falling back
+      // to the directory's own basename.
+      const label = name.value.trim();
+      for (const row of props.target.rows ?? []) {
+        await api.sessionUpdateMeta(row.id, { ...metaOf(row), project: label || undefined }, row.revision);
+      }
+      await sessions.rebuild();
     } else {
       const snap = props.kind === 'rename' ? await sessions.rename(id, name.value.trim())
         : await sessions.updateMeta(snapshot.value, { tags: draftTags.value });
@@ -61,10 +78,15 @@ async function save() {
 </script>
 
 <template>
-  <Modal :open="true" compact :title="i18n.t(`manage.${kind}`)" :dismissable="!busy" @close="emit('close')">
+  <Modal :open="true" compact :title="title" :dismissable="!busy" @close="emit('close')">
     <form id="session-list-action" @submit.prevent="save">
       <p class="sl-action-name">{{ target.name || target.id.slice(0, 8) }}</p>
-      <input v-if="kind === 'rename'" v-model="name" class="input" :aria-label="i18n.t('manage.rename')" :disabled="busy" />
+      <p v-if="kind === 'delete-project'">{{ tr('将删除此项目下的 ' + (target.rows?.length ?? 0) + ' 个会话记录，磁盘上的工作区文件不受影响。', 'Deletes the ' + (target.rows?.length ?? 0) + ' session records in this project. Files on disk are untouched.') }}</p>
+      <input v-else-if="kind === 'rename'" v-model="name" class="input" :aria-label="i18n.t('manage.rename')" :disabled="busy" />
+      <template v-else-if="kind === 'rename-project'">
+        <input v-model="name" class="input" :aria-label="title" :disabled="busy" />
+        <span class="hint">{{ tr('留空则恢复为文件夹名。', 'Leave empty to fall back to the folder name.') }}</span>
+      </template>
       <p v-else-if="kind === 'delete'">{{ i18n.t('manage.deleteConfirm') }}</p>
       <template v-else>
         <p v-if="loading" role="status">{{ i18n.t('sessions.loading') }}</p>
@@ -79,7 +101,7 @@ async function save() {
     </form>
     <template #footer>
       <button class="btn ghost" :disabled="busy" @click="emit('close')">{{ i18n.t('manage.cancel') }}</button>
-      <button form="session-list-action" type="submit" class="btn" :class="kind === 'delete' ? 'danger' : 'primary'" :disabled="!canSave">{{ busy ? i18n.t('sessions.loading') : i18n.t(kind === 'delete' ? 'manage.delete' : 'common.save') }}</button>
+      <button form="session-list-action" type="submit" class="btn" :class="kind === 'delete' || kind === 'delete-project' ? 'danger' : 'primary'" :disabled="!canSave">{{ busy ? i18n.t('sessions.loading') : i18n.t(kind === 'delete' || kind === 'delete-project' ? 'manage.delete' : 'common.save') }}</button>
     </template>
   </Modal>
 </template>
@@ -87,6 +109,7 @@ async function save() {
 <style scoped>
 .sl-action-name { margin: 0 0 4px; color: var(--fg-subtle); overflow-wrap: anywhere; }
 form > p { margin: 0 0 4px; }
+form > .hint { display: block; margin: 4px 0 0; font-size: 12px; line-height: 1.5; color: var(--fg-subtle); }
 form > :last-child { margin-bottom: 0; }
 .sl-tag-editor { display: flex; flex-direction: column; gap: 10px; }
 .sl-tag-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }

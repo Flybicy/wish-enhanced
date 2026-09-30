@@ -2,11 +2,16 @@
 import Icon from '../../ui/components/Icon.vue';
 import Hint from '../../ui/components/Hint.vue';
 import { tr } from '../../core/i18n/tr.ts';
+import { DropdownMenuRoot, DropdownMenuTrigger, DropdownMenuPortal, DropdownMenuContent, DropdownMenuItem } from 'reka-ui';
+import { usePageActivity } from '../../ui/composables/usePageActivity.ts';
 
 // A workspace heading: the folder the sessions under it run in. It collapses,
 // because a list of projects is only readable when the reader can close one.
-const props = defineProps<{ cwd: string; name: string; count: number; collapsed: boolean }>();
-const emit = defineEmits<{ toggle: [] }>();
+// Real directories also carry a menu that renames or deletes the whole
+// project; the synthetic groups (standalone, archived) never do.
+const props = defineProps<{ cwd: string; name: string; count: number; collapsed: boolean; menu?: boolean }>();
+const emit = defineEmits<{ toggle: []; rename: []; delete: [] }>();
+const pageActive = usePageActivity();
 </script>
 
 <template>
@@ -19,6 +24,15 @@ const emit = defineEmits<{ toggle: [] }>();
         <span class="ws-count">{{ count }}</span>
       </button>
     </Hint>
+    <DropdownMenuRoot v-if="menu" :modal="false">
+      <DropdownMenuTrigger class="sl-menu-trigger ws-menu-trigger" :aria-label="`${tr('项目操作', 'Project actions')} · ${cwd}`"><Icon name="ellipsis-vertical" /></DropdownMenuTrigger>
+      <DropdownMenuPortal v-if="pageActive">
+        <DropdownMenuContent class="menu-pop sl-menu" align="end" :side-offset="4" :collision-padding="8">
+          <DropdownMenuItem class="menu-item" @select="emit('rename')"><Icon name="pencil" />{{ tr('重命名项目', 'Rename project') }}</DropdownMenuItem>
+          <DropdownMenuItem class="menu-item sl-delete" @select="emit('delete')"><Icon name="trash-2" />{{ tr('删除项目', 'Delete project') }}</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenuPortal>
+    </DropdownMenuRoot>
   </div>
 </template>
 
@@ -35,4 +49,7 @@ const emit = defineEmits<{ toggle: [] }>();
 .ws-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ws-count { margin-left: auto; font-size: 10.5px; font-weight: 500; color: var(--fg-faint); font-family: var(--mono); }
 .ws-head.loose .ws-mark { color: var(--fg-faint); }
+.ws-head { position: relative; }
+.ws-menu-trigger { margin: 2px 6px 0 0; }
+.ws-head:hover .ws-menu-trigger, .ws-head:focus-within .ws-menu-trigger, .ws-menu-trigger[data-state="open"] { opacity: 1; }
 </style>

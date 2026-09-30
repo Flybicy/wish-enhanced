@@ -7,12 +7,19 @@ import { i18n } from '../../core/i18n/index.ts';
 import { usePageActivity } from '../../ui/composables/usePageActivity.ts';
 import SessionListRow from './SessionListRow.vue';
 import SessionListAction from './SessionListAction.vue';
+import { useRowActions } from './useRowActions.ts';
 import Icon from '../../ui/components/Icon.vue';
 const active = usePageActivity();
 const rows = ref<any[]>([]);
 const loading = ref(false);
 const error = ref<unknown>();
 const action = ref<{ target: { id: string; name?: string }; kind: 'rename' | 'tags' | 'delete' }>();
+// Pin/archive/branch run directly (composable); only dialog kinds park here.
+const { runRowAction } = useRowActions();
+function onAction(row: any, kind: string) {
+  if (kind === 'rename' || kind === 'tags' || kind === 'delete') action.value = { target: { id: row.id, name: row.name }, kind };
+  else void runRowAction(row, kind).then(refresh);
+}
 let generation = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
 async function load() {
@@ -47,7 +54,7 @@ onScopeDispose(() => { generation++; clearTimeout(timer); off.forEach(stop => st
     <p v-else-if="loading && !rows.length" class="hint">{{ i18n.locale.value === 'zh' ? '正在读取会话…' : 'Loading sessions…' }}</p>
     <p v-else-if="!rows.length" class="hint">{{ i18n.t('sessions.empty') }}</p>
     <SessionListRow v-for="(row, index) in rows" :key="row.id" :row="row" :index="index" :active="false"
-      @action="kind => action = { target: { id: row.id, name: row.name }, kind }" />
+      @action="kind => onAction(row, kind)" />
     <RouterLink to="/sessions/all" class="btn ghost all-sessions">{{ i18n.locale.value === 'zh' ? '查看全部会话' : 'View all sessions' }}<Icon name="chevron-right" /></RouterLink>
     <SessionListAction v-if="action" :key="`${action.target.id}:${action.kind}`" :target="action.target" :kind="action.kind" @close="action = undefined; refresh()" />
   </section>

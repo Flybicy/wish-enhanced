@@ -42,6 +42,8 @@ export interface SessionWorkspace {
   /// Last path segment, the name a reader recognises.
   name: string;
   rows: SessionRow[];
+  /// True for the trailing pseudo-group that parks archived sessions.
+  archived?: boolean;
 }
 
 export function workspaceOf(row: { descriptor?: any } | null | undefined): string {
@@ -54,12 +56,29 @@ export function workspaceName(cwd: string): string {
   return trimmed.split(/[\\/]/).filter(Boolean).pop() ?? trimmed;
 }
 
+// Key of the synthetic trailing group that parks archived sessions. The NUL
+// prefix cannot collide with a real directory, and SessionList collapses it
+// by default — archiving is "file away", not "delete".
+export const ARCHIVED_WORKSPACE = String.fromCharCode(0) + 'archived';
+
+function projectNameOf(rows: SessionRow[]): string | undefined {
+  for (const row of rows) {
+    const name = metaOf(row).project;
+    if (typeof name === 'string' && name.trim()) return name.trim();
+  }
+  return undefined;
+}
+
 /// Group rows into workspaces, preserving the list's own order (newest first)
-/// both between groups and inside them. A session without a directory forms its
-/// own unnamed group rather than being hidden.
+/// both between groups and inside them. A session without a directory forms
+/// its own unnamed group rather than being hidden. Pinned rows rise to the
+/// top of their group; a `project` metadata label renames the group without
+/// touching the disk; archived rows are filed into one trailing group.
 export function groupByWorkspace(rows: SessionRow[]): SessionWorkspace[] {
   const groups = new Map<string, SessionWorkspace>();
+  const archived: SessionRow[] = [];
   for (const row of rows) {
+    if (metaOf(row).archived) { archived.push(row); continue; }
     const cwd = workspaceOf(row);
     let group = groups.get(cwd);
     if (!group) {
@@ -68,7 +87,22 @@ export function groupByWorkspace(rows: SessionRow[]): SessionWorkspace[] {
     }
     group.rows.push(row);
   }
-  return [...groups.values()];
+  const result = [...groups.values()];
+  for (const group of result) {
+    if (group.cwd) {
+      const override = projectNameOf(group.rows);
+      if (override) group.name = override;
+    }
+    const pinned = group.rows.filter(row => metaOf(row).pinned);
+    if (pinned.length && pinned.length < group.rows.length) {
+      group.rows = [...pinned, ...group.rows.filter(row => !metaOf(row).pinned)];
+    }
+  }
+  if (archived.length) {
+    const pinned = archived.filter(row => metaOf(row).pinned);
+    result.push({ cwd: ARCHIVED_WORKSPACE, name: '', archived: true, rows: pinned.length ? [...pinned, ...archived.filter(row => !metaOf(row).pinned)] : archived });
+  }
+  return result;
 }
 // Opaque server pagination token, bound to the current filter + sort.
 export type SessionsCursor = NonNullable<SessionsListParams['cursor']>;

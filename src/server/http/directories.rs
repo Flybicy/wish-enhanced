@@ -14,11 +14,31 @@ pub struct DirectoryListing {
   directories: Vec<String>,
 }
 
+// Windows `canonicalize` returns `\\?\`-prefixed verbatim paths. They are
+// correct but hostile in a UI, and they break callers that join segments
+// with forward slashes (verbatim paths reject them outright). Hand back a
+// plain path whenever stripping the prefix is safe: short enough for the
+// legacy Win32 limit, and free of the trailing dot or space that Win32
+// would otherwise trim from a non-verbatim path.
+fn display_path(path: PathBuf) -> PathBuf {
+  let text = path.as_os_str().to_string_lossy().into_owned();
+  let stripped = if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+    Some(format!(r"\\{rest}"))
+  } else {
+    text.strip_prefix(r"\\?\").map(str::to_owned)
+  };
+  match stripped {
+    Some(plain) if plain.len() < 248 && !plain.ends_with('.') && !plain.ends_with(' ') => PathBuf::from(plain),
+    _ => path,
+  }
+}
+
 pub async fn list(Query(query): Query<DirectoryQuery>) -> Result<Json<DirectoryListing>, ApiError> {
   blocking(move || {
     let path = if query.path == "~" {
       PathBuf::from(
         std::env::var_os("HOME")
+          .or_else(|| std::env::var_os("USERPROFILE"))
           .ok_or_else(|| ApiError::bad_request("Server home directory is unavailable"))?,
       )
     } else {
@@ -27,9 +47,11 @@ pub async fn list(Query(query): Query<DirectoryQuery>) -> Result<Json<DirectoryL
     if !path.is_absolute() {
       return Err(ApiError::bad_request("Directory path must be absolute"));
     }
-    let path = path
-      .canonicalize()
-      .map_err(|error| ApiError::bad_request(format!("Cannot read directory: {error}")))?;
+    let path = display_path(
+      path
+        .canonicalize()
+        .map_err(|error| ApiError::bad_request(format!("Cannot read directory: {error}")))?,
+    );
     let entries = std::fs::read_dir(&path)
       .map_err(|error| ApiError::bad_request(format!("Cannot read directory: {error}")))?;
     let mut directories = Vec::new();
@@ -50,4 +72,26 @@ pub async fn list(Query(query): Query<DirectoryQuery>) -> Result<Json<DirectoryL
     }))
   })
   .await
+}
+
+#[cfg(test)]
+mod tests {
+  use super::display_path;
+  use std::path::PathBuf;
+
+  #[test]
+  fn verbatim_drive_prefix_is_stripped() {
+    assert_eq!(display_path(PathBuf::from(r"\\?\D:\Wish")), PathBuf::from(r"D:\Wish"));
+  }
+
+  #[test]
+  fn verbatim_unc_prefix_becomes_a_plain_share() {
+    assert_eq!(display_path(PathBuf::from(r"\\?\UNC\server\share")), PathBuf::from(r"\\server\share"));
+  }
+
+  #[test]
+  fn long_verbatim_paths_stay_verbatim() {
+    let long = format!(r"\\?\C:\{}", "x".repeat(300));
+    assert_eq!(display_path(PathBuf::from(long.clone())), PathBuf::from(long));
+  }
 }
