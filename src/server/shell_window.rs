@@ -17,14 +17,18 @@ use windows_sys::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows_sys::Win32::System::LibraryLoader::{
   GetProcAddress, GetModuleHandleW, LoadLibraryW,
 };
-use windows_sys::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext};
+use windows_sys::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForWindow, GetSystemMetricsForDpi, SetProcessDpiAwarenessContext};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
   CreateWindowExW, CS_HREDRAW, CS_VREDRAW, DefWindowProcW, DispatchMessageW,
-  GetClientRect, GetMessageW, GetSystemMetrics, GetWindowPlacement, IDC_ARROW, LoadCursorW, MSG,
-  PostMessageW, PostQuitMessage, RegisterClassW, SetWindowPlacement, ShowWindow, SW_SHOW,
-  SM_CXSCREEN, SM_CYSCREEN, TranslateMessage, WINDOWPLACEMENT, WM_CLOSE, WM_DESTROY, WM_SIZE,
+  GetClientRect, GetMessageW, GetSystemMetrics, GetWindowPlacement, GetWindowRect, IsZoomed,
+  IDC_ARROW, LoadCursorW, MSG, NCCALCSIZE_PARAMS, PostMessageW, PostQuitMessage, RegisterClassW,
+  SetWindowPlacement, ShowWindow, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
+  SM_CXFRAME, SM_CXPADDEDBORDER, SM_CXSCREEN, SM_CYFRAME, SM_CYSCREEN, TranslateMessage,
+  WINDOWPLACEMENT, WM_CLOSE, WM_DESTROY, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_SIZE,
   WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
+use windows_sys::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
+use windows_sys::Win32::UI::Controls::MARGINS;
 
 const S_OK: i32 = 0;
 
@@ -186,6 +190,11 @@ pub(crate) fn run(addr: SocketAddr, profile_dir: Option<PathBuf>, open_session: 
     // The frame belongs to the paper: ask DWM for a caption in the light
     // theme colour instead of the system accent. Best effort.
     super::caption::tint(window);
+    // The interface paints its own title bar; the native frame is stripped in
+    // WM_NCCALCSIZE. A one-pixel extended frame keeps the drop shadow and the
+    // aero-snap animations that a plain popup would lose.
+    let margins = MARGINS { cxLeftWidth: 0, cxRightWidth: 0, cyTopHeight: 0, cyBottomHeight: 1 };
+    DwmExtendFrameIntoClientArea(window, &margins);
     // Remembered geometry, or a sensible first show.
     match load_placement(PLACEMENT_PATH.get().expect("placement path set")) {
       Some(mut placement) => {
@@ -275,8 +284,139 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, message: u32, wparam: WPARAM, lpa
       PostQuitMessage(0);
       0
     }
+    // The interface renders the caption itself, so the native frame is removed
+    // while the resize/drag geometry is answered here. Client-side decoration,
+    // pure Win32: no extra dependency, no WebView2 message plumbing.
+    WM_NCCALCSIZE => {
+      if wparam != 0 {
+        // A maximized borderless window otherwise spills its frame past the
+        // work area and hides the taskbar; inset by the frame it would have had.
+        if IsZoomed(hwnd) != 0 {
+          let params = &mut *(lparam as *mut NCCALCSIZE_PARAMS);
+          let dpi = GetDpiForWindow(hwnd);
+          let fx = GetSystemMetricsForDpi(SM_CXFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+          let fy = GetSystemMetricsForDpi(SM_CYFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+          params.rgrc[0].left += fx;
+          params.rgrc[0].top += fy;
+          params.rgrc[0].right -= fx;
+          params.rgrc[0].bottom -= fy;
+        }
+        return 0;
+      }
+      DefWindowProcW(hwnd, message, wparam, lparam)
+    }
+    WM_NCHITTEST => hit_test(hwnd, lparam),
+    WM_NCLBUTTONDOWN => match wparam as isize {
+      HT_MINBUTTON => {
+        ShowWindow(hwnd, SW_MINIMIZE);
+        0
+      }
+      HT_MAXBUTTON => {
+        ShowWindow(hwnd, if IsZoomed(hwnd) != 0 { SW_RESTORE } else { SW_MAXIMIZE });
+        0
+      }
+      HT_CLOSE => {
+        PostMessageW(hwnd, WM_CLOSE, 0, 0);
+        0
+      }
+      _ => DefWindowProcW(hwnd, message, wparam, lparam),
+    },
     _ => DefWindowProcW(hwnd, message, wparam, lparam),
   }
+}
+
+// Hit-test codes from winuser.h (windows-sys does not re-export the HT* set).
+const HT_CLIENT: isize = 1;
+const HT_CAPTION: isize = 2;
+const HT_MINBUTTON: isize = 8;
+const HT_MAXBUTTON: isize = 9;
+const HT_LEFT: isize = 10;
+const HT_RIGHT: isize = 11;
+const HT_TOP: isize = 12;
+const HT_TOPLEFT: isize = 13;
+const HT_TOPRIGHT: isize = 14;
+const HT_BOTTOM: isize = 15;
+const HT_BOTTOMLEFT: isize = 16;
+const HT_BOTTOMRIGHT: isize = 17;
+const HT_CLOSE: isize = 20;
+
+/// The interface title bar is 36 logical pixels tall; its three window buttons
+/// sit at the right, 46 logical pixels wide each (matching WindowTitlebar.vue).
+/// A resize grip lines the edges. Everything else is the web view's client.
+unsafe fn hit_test(hwnd: HWND, lparam: LPARAM) -> LRESULT {
+  let dpi = GetDpiForWindow(hwnd);
+  let scale = if dpi == 0 { 1.0 } else { dpi as f32 / 96.0 };
+  let bar = (36.0 * scale) as i32;
+  let button = (46.0 * scale) as i32;
+  let border = (6.0 * scale) as i32;
+
+  let zoomed = IsZoomed(hwnd) != 0;
+  let inset = if zoomed {
+    GetSystemMetricsForDpi(SM_CXFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi)
+  } else {
+    0
+  };
+
+  let mut wr = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+  if GetWindowRect(hwnd, &mut wr) == 0 {
+    return HT_CLIENT;
+  }
+  // WM_NCHITTEST carries screen coordinates as signed 16-bit halves.
+  let sx = (lparam & 0xffff) as u16 as i16 as i32;
+  let sy = ((lparam >> 16) & 0xffff) as u16 as i16 as i32;
+  let x = sx - wr.left - inset;
+  let y = sy - wr.top - inset;
+
+  let mut cr = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+  GetClientRect(hwnd, &mut cr);
+  let cw = cr.right;
+  let ch = cr.bottom;
+
+  if !zoomed {
+    let left = x < border;
+    let right = x >= cw - border;
+    let top = y < border;
+    let bottom = y >= ch - border;
+    if top && left {
+      return HT_TOPLEFT;
+    }
+    if top && right {
+      return HT_TOPRIGHT;
+    }
+    if bottom && left {
+      return HT_BOTTOMLEFT;
+    }
+    if bottom && right {
+      return HT_BOTTOMRIGHT;
+    }
+    if left {
+      return HT_LEFT;
+    }
+    if right {
+      return HT_RIGHT;
+    }
+    if top {
+      return HT_TOP;
+    }
+    if bottom {
+      return HT_BOTTOM;
+    }
+  }
+
+  if y >= 0 && y < bar {
+    if x >= cw - button {
+      return HT_CLOSE;
+    }
+    if x >= cw - 2 * button {
+      return HT_MAXBUTTON;
+    }
+    if x >= cw - 3 * button {
+      return HT_MINBUTTON;
+    }
+    return HT_CAPTION;
+  }
+
+  HT_CLIENT
 }
 
 /// The completion callbacks WebView2 calls: one shared shape for the

@@ -312,12 +312,7 @@ const { startComposerDrag, resizeKeys } = useComposerDrag(sizing, height);
       :aria-label="i18n.t('composer.resize')" :aria-valuemin="sizing.min()" :aria-valuemax="sizing.max()"
       :aria-valuenow="height"
       @pointerdown="startComposerDrag" @keydown="resizeKeys" /></Hint>
-    <div v-if="!mobile" class="composer-toolbar">
-      <Hint :text="i18n.t('chat.image')"><button class="btn ghost icon-only" :aria-label="i18n.t('chat.image')"
-        @click="pickAttachment('image', $event)"><Icon name="image" /></button></Hint>
-      <Hint :text="i18n.t('chat.attach')"><button class="btn ghost icon-only" :aria-label="i18n.t('chat.attach')"
-        @click="pickAttachment('file', $event)"><Icon name="paperclip" /></button></Hint>
-      <button v-if="!start && mobile" ref="btwButton" type="button" class="btn ghost composer-btw" :aria-label="i18n.locale.value==='zh'?'BTW · 临时对话':'BTW · Temporary chat'" :aria-expanded="btwOpen" aria-haspopup="dialog" aria-controls="btw-bubble" @click="toggleBtw">BTW</button>
+    <div v-if="!mobile && $slots.selection" class="composer-toolbar">
       <slot name="selection" />
       <div class="grow" />
     </div>
@@ -369,6 +364,10 @@ const { startComposerDrag, resizeKeys } = useComposerDrag(sizing, height);
       </button></Hint>
     </div>
     <div v-if="!mobile || start" class="composer-footer">
+      <div v-if="!mobile" class="composer-footer-actions">
+        <Hint :text="i18n.t('chat.image')"><button class="btn ghost icon-only" :aria-label="i18n.t('chat.image')" @click="pickAttachment('image', $event)"><Icon name="image" /></button></Hint>
+        <Hint :text="i18n.t('chat.attach')"><button class="btn ghost icon-only" :aria-label="i18n.t('chat.attach')" @click="pickAttachment('file', $event)"><Icon name="paperclip" /></button></Hint>
+      </div>
       <div v-if="$slots['footer-start']" class="composer-footer-start"><slot name="footer-start" /></div>
       <Hint v-if="queueable" :text="i18n.t('chat.queueSend')"><button class="send-btn" :disabled="sending"
         :aria-label="i18n.t('chat.queueSend')" @click="submit()">
@@ -393,6 +392,7 @@ const { startComposerDrag, resizeKeys } = useComposerDrag(sizing, height);
 </template>
 <style scoped>
 .composer { position: relative; }
+.composer-footer-actions { display:flex; align-items:center; gap:2px; margin-right:auto; }
 .composer-footer-start { margin-right:auto; min-width:0; max-width:calc(100% - 52px); }
 .composer-btw{height:32px;min-height:32px;padding:0 9px;flex:none;font-size:11px;font-weight:700;letter-spacing:.05em;color:var(--fg-subtle)}
 .composer-btw[aria-expanded='true']{background:var(--bg-hover);color:var(--fg)}

@@ -1,4 +1,26 @@
 .shell { display: flex; height: 100dvh; overflow: hidden; }
+
+/* Desktop shell: the app paints its own 36px caption (WindowTitlebar.vue) and
+   the native frame is removed in shell_window.rs. #app is a flex column, so the
+   title bar takes its fixed strip and the view below fills the rest. */
+.window-titlebar { display: none; }
+html.desktop-shell #app { overflow: hidden; }
+html.desktop-shell .window-titlebar {
+  display: flex; align-items: center; flex: 0 0 36px; height: 36px;
+  padding-left: 12px; background: var(--bg); border-bottom: 1px solid var(--line);
+  -webkit-user-select: none; user-select: none;
+}
+html.desktop-shell .window-titlebar .wt-brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
+html.desktop-shell .window-titlebar .wt-logo { width: 16px; height: 16px; display: block; -webkit-user-drag: none; }
+html.desktop-shell .window-titlebar .wt-title { font-size: 12px; font-weight: 600; letter-spacing: .04em; color: var(--fg-muted); white-space: nowrap; }
+html.desktop-shell .window-titlebar .wt-spacer { flex: 1 1 auto; }
+html.desktop-shell .window-titlebar .wt-controls { display: flex; align-items: stretch; align-self: stretch; }
+html.desktop-shell .window-titlebar .wt-btn { width: 46px; display: flex; align-items: center; justify-content: center; color: var(--fg-subtle); }
+html.desktop-shell .window-titlebar .wt-btn.wt-close { color: var(--fg-muted); }
+/* The strip is fixed, so the shell (and transient gate screens) must shrink to
+   fill the remaining column height instead of asking for the whole viewport. */
+html.desktop-shell .shell { height: auto; flex: 1 1 auto; min-height: 0; }
+html.desktop-shell .provider-gate-status { min-height: 0; flex: 1 1 auto; }
 .vbar {
   width: var(--w-sidebar); flex: none; display: flex; flex-direction: column; align-items: center;
   padding: 10px 0 8px; gap: 4px; background: var(--rail-bg); z-index: 20;

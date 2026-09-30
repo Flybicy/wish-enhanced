@@ -20,6 +20,12 @@ import { tr } from './core/i18n/tr.ts';
 import { sessionLocation } from './ui/sessionNavigation.ts';
 import { isSignedOut } from './core/connection.ts';
 import SignOutButton from './features/connection/SignOutButton.vue';
+import WindowTitlebar from './ui/components/WindowTitlebar.vue';
+
+// The native window frame is stripped in the desktop shell; the app paints its
+// own caption instead. WebView2 alone exposes window.chrome.webview.
+const desktopShell = typeof window !== 'undefined' && !!(window as { chrome?: { webview?: unknown } }).chrome?.webview;
+if (desktopShell && typeof document !== 'undefined') document.documentElement.classList.add('desktop-shell');
 
 const ProviderSetup = defineAsyncComponent(() => import('./features/onboarding/ProviderSetup.vue'));
 const ConnectView = defineAsyncComponent(() => import('./features/connection/ConnectView.vue'));
@@ -66,6 +72,7 @@ const go = (item: typeof nav[number]) => router.push(item.id === 'sessions' ? se
 
 <template>
   <TooltipProvider :delay-duration="450" :skip-delay-duration="150">
+  <WindowTitlebar v-if="desktopShell" />
   <ConnectView v-if="!gate" />
   <ProviderSetup v-else-if="gate.state.value === 'required'" @complete="async () => { await router.replace('/new'); await gate!.refresh(); }" />
   <main v-else-if="gate.state.value !== 'ready'" class="provider-gate-status" aria-live="polite">
