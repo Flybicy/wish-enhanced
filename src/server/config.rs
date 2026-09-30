@@ -257,7 +257,15 @@ impl Default for Defaults {
       instructions: String::new(),
       reasoning: None,
       max_output_tokens: None,
-      compaction: None,
+      // Auto-compaction on by default: trigger at 272k tokens (matches the
+      // stock model's context window), condense back to 96k, and keep a
+      // standby summary warmed every 48k of fresh turns.
+      compaction: Some(CompactionConfig {
+        trigger_tokens: 272_000,
+        target_tokens: 96_000,
+        segment_tokens: 48_000,
+        estimator: crate::executor::model::tokens::TokenEstimator::default(),
+      }),
     }
   }
 }

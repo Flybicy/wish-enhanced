@@ -82,7 +82,7 @@ const useDefaults = () => { compaction.value = structuredClone(defaults.value); 
 // have none, and an empty object would fail validation. These are the same
 // defaults a fresh session is expected to use once compaction is switched on.
 function compactionSeed(): Compaction {
-  const base: Compaction = { trigger_tokens: 160000, target_tokens: 60000, segment_tokens: 40000 };
+  const base: Compaction = { trigger_tokens: 272000, target_tokens: 96000, segment_tokens: 48000 };
   return { ...base, ...(defaults.value ?? {}) };
 }
 function setCompaction(enabled: boolean) {
