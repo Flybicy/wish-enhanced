@@ -1,41 +1,30 @@
 <script setup lang="ts">
-// Settings that belong to this session alone: context compaction and its shell.
+// Settings that belong to this session alone: its shell and context actions.
 // New sessions keep taking the defaults from Settings → Service & sessions.
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
-import { useRouter } from 'vue-router';
 import { SwitchRoot, SwitchThumb } from 'reka-ui';
 import { get } from '../../core/api/client.ts';
 import * as api from '../../core/api/endpoints.ts';
 import { chat } from '../../core/state/chatSlice.ts';
-import { i18n } from '../../core/i18n/index.ts';
 import { tr } from '../../core/i18n/tr.ts';
 import Modal from '../../ui/components/Modal.vue';
 import Icon from '../../ui/components/Icon.vue';
 import { useMedia } from '../../ui/composables/useMedia.ts';
 import { showError } from '../../ui/errorDialog.ts';
 import { toast } from '../../ui/toast.ts';
-import { compactionFields } from '../settings/fields.ts';
 import ServerShellSettings, { type ShellCatalog } from '../settings/ServerShellSettings.vue';
 import '../settings/settings.css';
 
 defineEmits<{ close: [] }>();
-const router = useRouter();
-function openCapabilities() {
-  const id = chat.sessionId.value;
-  if (id) void router.push(`/s/${id}/capabilities`);
-}
 const isMobile = useMedia('(max-width: 899px)');
 const snapshot = computed(() => chat.snapshot.value);
-const running = computed(() => snapshot.value?.phase !== 'idle');
 const hasShell = computed(() => !!snapshot.value?.descriptor?.shell);
 
-type Compaction = { trigger_tokens: number; target_tokens: number; segment_tokens: number; [key: string]: unknown };
 type Shell = { program: string; args: string[] | null };
-const compaction = ref<Compaction | null>(null);
 const ownShell = ref(false);
 const shell = ref<Shell>({ program: '', args: null });
 const source = ref('');
-const draftValue = () => JSON.stringify({ compaction: compaction.value, shell: ownShell.value ? shell.value : null });
+const draftValue = () => JSON.stringify({ shell: ownShell.value ? shell.value : null });
 const dirty = computed(() => !!source.value && draftValue() !== source.value);
 
 let loadedFor: string | null = null;
@@ -43,7 +32,6 @@ function reset() {
   const current = snapshot.value;
   if (!current) return;
   loadedFor = current.id;
-  compaction.value = current.config?.compaction ? structuredClone(current.config.compaction) : null;
   const own = current.descriptor?.shell_command;
   ownShell.value = !!own;
   shell.value = own ? { program: own.program ?? '', args: own.args ?? null } : { program: '', args: null };
@@ -53,16 +41,14 @@ function reset() {
 // build the draft once it does, and again for another session — never over edits.
 watch(snapshot, value => { if (value && value.id !== loadedFor) reset(); }, { immediate: true });
 
-// What the global settings would give: the reset target and the shell label.
-const defaults = ref<Compaction | null>(null);
+// The shell label needs the catalog and the global setting.
 const catalog = ref<ShellCatalog | null>(null);
 const globalShell = ref<Shell | null>(null);
 let alive = true;
 onUnmounted(() => { alive = false; });
 onMounted(async () => {
-  const [base, shells, config] = await Promise.allSettled([get('/defaults'), get('/shells'), get('/config')]);
+  const [shells, config] = await Promise.allSettled([get('/shells'), get('/config')]);
   if (!alive) return;
-  if (base.status === 'fulfilled') defaults.value = base.value.session_config?.compaction ?? null;
   if (shells.status === 'fulfilled') catalog.value = shells.value;
   if (config.status === 'fulfilled') globalShell.value = config.value.config.shell ?? null;
 });
@@ -70,27 +56,11 @@ const shellName = (value: Shell | null) => {
   const program = value?.program || catalog.value?.default.program;
   return program ? program.split(/[\\/]/).pop() : tr('系统默认', 'System default');
 };
-const differsFromDefaults = computed(() => !!defaults.value && JSON.stringify(compaction.value) !== JSON.stringify(defaults.value));
-
 // Leaving the global shell starts from its values rather than a blank choice.
 function setOwnShell(own: boolean) {
   ownShell.value = own;
   if (own && !snapshot.value?.descriptor?.shell_command && globalShell.value) shell.value = { program: globalShell.value.program ?? '', args: globalShell.value.args ?? null };
 }
-const useDefaults = () => { compaction.value = structuredClone(defaults.value); };
-// A draft needs real budgets: the session may have none, the global config may
-// have none, and an empty object would fail validation. These are the same
-// defaults a fresh session is expected to use once compaction is switched on.
-function compactionSeed(): Compaction {
-  const base: Compaction = { trigger_tokens: 272000, target_tokens: 96000, segment_tokens: 48000 };
-  return { ...base, ...(defaults.value ?? {}) };
-}
-function setCompaction(enabled: boolean) {
-  compaction.value = enabled ? structuredClone(snapshot.value?.config?.compaction ?? compactionSeed()) : null;
-}
-const compactTokens = (value: unknown) => typeof value === 'number' && value > 0
-  ? new Intl.NumberFormat(i18n.locale.value === 'zh' ? 'zh-CN' : 'en', { notation: 'compact', maximumFractionDigits: 1 }).format(value)
-  : '';
 
 const busy = ref(false);
 async function save() {
@@ -100,10 +70,6 @@ async function save() {
   const saved = JSON.parse(source.value);
   busy.value = true;
   try {
-    if (JSON.stringify(compaction.value) !== JSON.stringify(saved.compaction)) {
-      const next = await api.sessionUpdateConfig(id, { ...current.config, compaction: compaction.value }, current.revision);
-      if (chat.sessionId.value === id) chat.snapshot.value = next;
-    }
     const wanted = ownShell.value ? shell.value : null;
     if (JSON.stringify(wanted) !== JSON.stringify(saved.shell)) {
       const next = await api.sessionSetShell(id, wanted);
@@ -146,23 +112,7 @@ async function act(kind: 'compact' | 'clear') {
     <p class="session-settings-intro">{{ tr('只影响这个会话。新建会话仍使用「设置 → 服务与会话」中的默认值。', 'These apply to this session only. New sessions keep using the defaults in Settings → Service & sessions.') }}</p>
 
     <section class="set-section">
-      <div class="set-card caps-quicklink">
-        <button class="set-row inline as-link" :aria-label="tr('查看能力面板', 'View capabilities')" @click="openCapabilities">
-          <span class="set-label"><span>{{ tr('能力面板', 'Capabilities') }}</span><small>{{ tr('MCP · 技能 · 记忆 · 子代理 · 快照 · Web', 'MCP · Skills · Memory · Subagents · Snapshots · Web') }}</small></span>
-          <Icon name="chevron-right" />
-        </button>
-      </div>
-    </section>
-
-    <section class="set-section">
-      <header class="set-section-head"><h3>{{ tr('上下文压缩', 'Context compaction') }}</h3><p>{{ tr('对话接近上限时，把较早的内容压缩成摘要。', 'Summarizes earlier turns as the conversation approaches its limit.') }}</p></header>
-      <div class="set-card">
-        <div class="set-row inline toggle-row"><span class="set-label"><span>{{ tr('自动压缩', 'Compact automatically') }}</span><small v-if="running">{{ tr('运行结束后才能保存这项修改', 'Can be saved once the current run ends') }}</small></span><SwitchRoot :model-value="!!compaction" class="cfg-switch" :aria-label="tr('自动压缩', 'Compact automatically')" @update:model-value="setCompaction"><SwitchThumb class="cfg-switch-thumb" /></SwitchRoot></div>
-        <template v-if="compaction">
-          <label v-for="field in compactionFields()" :key="field.key" class="set-row inline"><span class="set-label"><span>{{ field.label }}</span><small>{{ field.hint }}</small></span><span class="set-number"><em>{{ compactTokens(compaction[field.key]) }}</em><input class="input" type="number" min="1" inputmode="numeric" v-model.number="compaction[field.key]" /></span></label>
-        </template>
-      </div>
-      <button v-if="compaction && differsFromDefaults" type="button" class="btn ghost set-reset" @click="useDefaults"><Icon name="refresh-cw" />{{ tr('使用全局默认值', 'Use the global defaults') }}</button>
+      <header class="set-section-head"><h3>{{ tr('上下文压缩', 'Context compaction') }}</h3><p>{{ tr('接近上限时自动压缩；预算跟随「设置 → 服务与会话」的默认值。', 'Compacts automatically near the limit; budgets follow the defaults in Settings → Service & sessions.') }}</p></header>
       <div class="set-card context-actions">
         <div class="set-row inline"><span class="set-label"><span>{{ tr('立即压缩', 'Compact now') }}</span><small>{{ tr('现在就把较早的内容压缩成摘要', 'Summarize earlier turns right away') }}</small></span><button type="button" class="btn" :disabled="busy || !snapshot?.config?.compaction" @click="act('compact')">{{ tr('压缩', 'Compact') }}</button></div>
         <div class="set-row inline"><span class="set-label"><span>{{ tr('清空上下文', 'Clear the context') }}</span><small>{{ tr('之后从空白上下文继续，历史记录保留', 'Continue from an empty context; history is kept') }}</small></span><button type="button" class="btn danger" :disabled="busy" @click="confirmClear = true">{{ tr('清空', 'Clear') }}</button></div>
@@ -192,16 +142,8 @@ async function act(kind: 'compact' | 'clear') {
 <style>
 .modal-card.session-settings-window:not(.modal-page) { width: min(92vw, 30rem); }
 .session-settings-intro { margin: 0 0 18px; font-size: 12px; line-height: 1.6; color: var(--fg-subtle); }
-.caps-quicklink .set-row { width: 100%; text-align: left; cursor: pointer; border: none; background: none; font: inherit; color: inherit; padding: 12px; }
-@media (hover: hover) { .caps-quicklink .set-row:hover { background: var(--bg-hover); } }
-.caps-quicklink .icon { color: var(--accent); }
 .session-settings-window .set-row.inline { grid-template-columns: minmax(0, 1fr) auto; }
-.session-settings-window .set-number input { width: 11ch; }
-@media (max-width: 599px) { .session-settings-window .set-number input { width: 9ch; } .session-settings-window .set-number { gap: 8px; } }
-.session-settings-window .context-actions { margin-top: 12px; }
 .session-settings-window .context-actions .btn { min-width: 64px; }
-.session-settings-window .set-reset { display: inline-flex; align-items: center; gap: 6px; margin: 8px 0 0; font-size: 12px; color: var(--fg-muted); }
-.session-settings-window .set-reset .icon { width: 13px; height: 13px; }
 .session-settings-window .modal-foot { align-items: center; }
 .session-settings-status { margin-right: auto; font-size: 12px; color: var(--fg-subtle); }
 .session-settings-window .modal-foot .btn { display: inline-flex; align-items: center; gap: 6px; }

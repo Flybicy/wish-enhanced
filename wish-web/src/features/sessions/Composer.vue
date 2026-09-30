@@ -117,12 +117,14 @@ function setTextOwned(v: string) {
   chat.setDraft(v, currentSid.value);
 }
 
-// Codex-style "/" command palette: only on the desktop chat composer, never in
-// the start pane or the mobile BTW draft. Commands act on the session; picking a
-// skill inserts an @mention reference.
+// Codex-style "/" command palette: on the desktop composer, start pane included.
+// Commands act on a session, so they are offered only in an open chat; on the
+// start pane the palette still lists skills to reference. Picking a skill
+// inserts an @mention reference.
 const slash = useSlashPalette({
   sessionId: computed(() => props.sessionId),
-  enabled: computed(() => !props.mobile && !props.start),
+  enabled: computed(() => !props.mobile),
+  allowCommands: computed(() => !props.start),
   text,
   setText: setTextOwned,
   focusEditor: () => { void nextTick(() => ta.value?.focus()); },

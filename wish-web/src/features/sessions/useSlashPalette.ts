@@ -12,12 +12,14 @@ import { showError } from '../../ui/errorDialog.ts';
 // character (no space yet) opens a menu of session commands and skill references.
 // A command acts on the session and clears the draft; a skill inserts an @mention
 // the model reads as an explicit reference, leaving the caret ready to keep typing.
+// The start pane has no session to act on, so there the menu lists skills only.
 export type SlashKind = 'command' | 'skill';
 export interface SlashItem { key: string; kind: SlashKind; icon: string; title: string; desc: string; keywords: string; run: () => void | Promise<void> }
 
 export function useSlashPalette(params: {
   sessionId: Ref<string>;
   enabled: Ref<boolean>;
+  allowCommands: Ref<boolean>;
   text: Ref<string>;
   setText: (value: string) => void;
   focusEditor: () => void;
@@ -32,13 +34,18 @@ export function useSlashPalette(params: {
   // Two shapes share the "/" trigger. Without a space it is command selection and
   // the token after "/" filters the list. With a space it is an argument-capturing
   // command like "/goal <objective>", which stays open so Enter commits the argument.
+  // Chinese IMEs may emit the fullwidth ／ for the slash key, which also opens
+  // the palette; the ideographic 、 they produce does not — only the English one pops.
   const ARG_COMMANDS = ['goal'];
   const parsed = computed(() => {
-    const m = /^\/(\S*)(\s+([\s\S]*))?$/.exec(params.text.value);
+    const m = /^[\/／](\S*)(\s+([\s\S]*))?$/.exec(params.text.value);
     if (!m) return null;
     if (m[2] === undefined) return { mode: 'select' as const, token: m[1]! };
     const command = m[1]!.toLocaleLowerCase();
     if (!ARG_COMMANDS.includes(command)) return null;
+    // Argument capture acts on the session; the start pane has none yet, so a
+    // typed "/goal …" there stays in plain selection mode.
+    if (!params.allowCommands.value) return { mode: 'select' as const, token: m[1]! };
     return { mode: 'arg' as const, command, rest: m[3] ?? '' };
   });
   const query = computed(() => (parsed.value?.mode === 'select' ? parsed.value.token : ''));
@@ -147,7 +154,9 @@ export function useSlashPalette(params: {
       }];
     }
     const term = query.value.trim().toLocaleLowerCase();
-    const pool = [...commands.value, ...skillItems.value];
+    // Commands act on a session; where there is none (the start pane) the
+    // palette offers skill references only.
+    const pool = params.allowCommands.value ? [...commands.value, ...skillItems.value] : [...skillItems.value];
     if (!term) return pool;
     return pool.filter(item => (item.title + ' ' + item.desc + ' ' + item.keywords).toLocaleLowerCase().includes(term));
   });

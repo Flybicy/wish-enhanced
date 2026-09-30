@@ -95,6 +95,19 @@ impl SessionSlot {
     if !session.get_state().is_stable() {
       session.settle_interrupted().map_err(ApiError::internal)?;
     }
+    // Sessions persisted before auto-compaction was on by default carry
+    // `compaction: None`, which the executor reads as "off". Fill it from the
+    // application defaults so those sessions compact like newly created ones.
+    if let Some(app) = app.upgrade() {
+      if session.get_config().compaction.is_none() {
+        let fill = app.configuration.lock().await.config.defaults.compaction.clone();
+        if let Some(fill) = fill {
+          let mut config = session.get_config().clone();
+          config.compaction = Some(fill);
+          session.set_config(config).map_err(ApiError::internal)?;
+        }
+      }
+    }
     // A session's own shell wins; otherwise it starts from the application's and
     // follows later saves (see `follow_global_shell`). An override that no longer
     // resolves (the program was removed) falls back to the application's.
