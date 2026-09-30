@@ -14,6 +14,7 @@ import { i18n } from '../../core/i18n/index.ts';
 import { chat } from '../../core/state/chatSlice.ts';
 import { prefs } from '../../core/state/prefsSlice.ts';
 import { tr } from '../../core/i18n/tr.ts';
+import { toast } from '../../ui/toast.ts';
 import Icon from '../../ui/components/Icon.vue';
 import Menu from '../../ui/components/Menu.vue';
 import ChatLog from './ChatLog.vue';
@@ -90,6 +91,21 @@ const goTab = (t: SessionTab) => {
   } else if (routeTab.value === t) closeTab();
   else void router.push({ name: `chat-${t}`, params: { id: id.value } });
 };
+
+// Ask mode: a side-effect tool call waiting for the user's decision.
+const pendingApproval = computed(() => chat.pendingApproval.value);
+const deciding = ref(false);
+async function decide(approve: boolean) {
+  if (deciding.value || !pendingApproval.value) return;
+  deciding.value = true;
+  try {
+    await chat.resolveApproval(approve);
+  } catch (error: any) {
+    toast(String(error?.detail || error?.message || error));
+  } finally {
+    deciding.value = false;
+  }
+}
 </script>
 
 <template>
@@ -126,6 +142,22 @@ const goTab = (t: SessionTab) => {
       </Menu>
     </div>
     <ChatLog :session-id="id" :mobile="isMobile" />
+    <div class="approval-anchor">
+      <Transition name="queue-dock">
+        <div v-if="pendingApproval" class="approval-card" role="alertdialog" :aria-label="tr('等待确认', 'Awaiting confirmation')">
+          <div class="approval-head">
+            <Icon name="circle-question-mark" class="approval-icon" />
+            <strong>{{ tr('等待确认', 'Awaiting confirmation') }}</strong>
+            <code class="approval-tool">{{ pendingApproval.name }}</code>
+          </div>
+          <pre v-if="pendingApproval.summary" class="approval-summary">{{ pendingApproval.summary }}</pre>
+          <div class="approval-actions">
+            <button type="button" class="btn ghost" :disabled="deciding" @click="decide(false)">{{ tr('拒绝', 'Deny') }}</button>
+            <button type="button" class="btn primary" :disabled="deciding" @click="decide(true)">{{ tr('允许', 'Allow') }}</button>
+          </div>
+        </div>
+      </Transition>
+    </div>
     <div class="queue-dock-anchor">
       <Transition name="queue-dock">
         <QueueDock v-if="queued.length > 0" :items="queued" :refill="onQueueEdit" />
@@ -143,3 +175,16 @@ const goTab = (t: SessionTab) => {
     <ReasoningSettings v-if="reasoningOpen" :session-id="id" @close="reasoningOpen = false" />
   </div>
 </template>
+
+<style scoped>
+.approval-anchor { display: flex; justify-content: center; }
+.approval-card { display: flex; flex-direction: column; gap: 8px; margin: 0 12px 8px; padding: 10px 12px;
+  max-width: min(560px, 100%); border: 1px solid var(--line-strong); border-radius: 12px; background: var(--bg-raised); }
+.approval-head { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--fg); }
+.approval-head .icon { width: 14px; height: 14px; flex: none; color: var(--accent); }
+.approval-tool { padding: 1px 6px; border-radius: 5px; background: var(--bg-sunken); color: var(--fg-subtle);
+  font: 11px var(--mono); }
+.approval-summary { margin: 0; padding: 8px 10px; max-height: 120px; overflow: auto; border-radius: 8px;
+  background: var(--bg-sunken); color: var(--fg-subtle); font: 11px/1.5 var(--mono); white-space: pre-wrap; word-break: break-all; }
+.approval-actions { display: flex; gap: 8px; justify-content: flex-end; }
+</style>

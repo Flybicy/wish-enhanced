@@ -17,6 +17,8 @@ export interface SessionCapabilities { input_modalities: string[] | null }
 export interface CapabilitiesOk { status: 'ok'; data: SessionCapabilities }
 export interface CapabilitiesErr { status: 'error'; error: unknown }
 export type ChatCapabilities = CapabilitiesOk | CapabilitiesErr;
+// A side-effect tool call waiting for the user's decision in ask mode.
+export interface PendingApproval { callId: string; name: string; summary: string }
 
 export const chat = (() => {
   const sessionId = shallowRef<string | null>(null);
@@ -26,6 +28,12 @@ export const chat = (() => {
   const error = shallowRef<any>(null);
   const stream = shallowRef(createEmptyStream());
   const capabilities = shallowRef<ChatCapabilities | null>(null);
+  // 修改 (edit) hands a committed message back to the composer: the turn actions
+  // set it after rewinding, the active session's Composer consumes it once.
+  const prefill = shallowRef<{ sessionId: string; text: string; attachments: any[] } | null>(null);
+  // The approval-required frame sets this; the card clears it on decision, new
+  // input, run end, and close. Restored on failure so the user can retry.
+  const pendingApproval = shallowRef<PendingApproval | null>(null);
 
   const isActive = computed(() => sessionId.value !== null);
   const phase = computed(() => snapshot.value?.phase ?? 'idle');
@@ -46,7 +54,7 @@ export const chat = (() => {
     sessionId, snapshot, stream, error, options,
     scheduleRefresh,
   });
-  const { sending, sentRun, deliveries, send, refreshDeliveries, moveQueued, cancelQueued } = deliveryState;
+  const { sending, sentRun, deliveries, send: deliver, refreshDeliveries, moveQueued, cancelQueued } = deliveryState;
 
   const history = createChatHistory<EntryView>({
     sessionId, error, options, open,
@@ -92,6 +100,7 @@ export const chat = (() => {
 
   function close() {
     epoch++;
+    pendingApproval.value = null;
     history.invalidate();
     deliveryState.reset();
     controller?.abort();
@@ -101,6 +110,7 @@ export const chat = (() => {
     clearInterval(poll);
     connection = null;
     sessionId.value = null;
+    prefill.value = null;
     refreshing = false;
     streamProcessor.reset();
   }
@@ -159,10 +169,22 @@ export const chat = (() => {
     connection = createSse({
       url: absUrl(`/sessions/${encodeURIComponent(id)}/events`),
       onFrame: (f) => {
-        if (current(own)) {
-          const next = streamProcessor.processFrame(f.data, stream.value);
-          if (current(own)) stream.value = next;
+        if (!current(own)) return;
+        let frame: any = null;
+        try { frame = JSON.parse(f.data); } catch { frame = null; }
+        if (frame && frame.type === 'approval_required' && frame.call_id != null) {
+          pendingApproval.value = {
+            callId: String(frame.call_id),
+            name: String(frame.name ?? ''),
+            summary: String(frame.summary ?? ''),
+          };
+          return;
         }
+        if (frame && (frame.type === 'operation_finished' || frame.type === 'operation_failed')) {
+          pendingApproval.value = null;
+        }
+        const next = streamProcessor.processFrame(f.data, stream.value);
+        if (current(own)) stream.value = next;
       },
       onState: ({ state: s, err }) => {
         if (!current(own)) return;
@@ -230,6 +252,7 @@ export const chat = (() => {
       const snap = await getSession(id, own);
       if (!current(own)) return;
       snapshot.value = snap;
+      if (!snap.running) pendingApproval.value = null;
 
       const result = history.viewingPast() ? { ok: false, drained: false } : await fetchNewer();
       if (!current(own)) return;
@@ -262,6 +285,28 @@ export const chat = (() => {
       try { await api.sessionInterrupt(sessionId.value); }
       catch (cause) { if (current(own)) error.value = cause; throw cause; }
       if (current(own)) scheduleRefresh();
+    }
+  }
+
+  // New input supersedes a pending approval card.
+  async function send(text: string, attachments: Parameters<typeof deliver>[1] = []): Promise<string | null> {
+    pendingApproval.value = null;
+    return deliver(text, attachments);
+  }
+
+  // Answer a side-effect tool call waiting in ask mode. The card clears
+  // optimistically and comes back when the request fails.
+  async function resolveApproval(approve: boolean): Promise<void> {
+    const id = sessionId.value;
+    const pending = pendingApproval.value;
+    if (!id || !pending) return;
+    pendingApproval.value = null;
+    const own = epoch;
+    try {
+      await api.sessionApproveTool(id, pending.callId, approve, options());
+    } catch (cause) {
+      if (current(own) && pendingApproval.value == null) pendingApproval.value = pending;
+      throw cause;
     }
   }
 
@@ -306,6 +351,8 @@ export const chat = (() => {
     sentRun,
     capabilities,
     deliveries,
+    prefill,
+    pendingApproval,
     isActive,
     phase,
     open,
@@ -320,6 +367,7 @@ export const chat = (() => {
     cancelQueued,
     moveQueued,
     interrupt,
+    resolveApproval,
     getDraft,
     setDraft,
     cancelLocate,

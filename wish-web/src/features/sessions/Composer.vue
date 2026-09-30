@@ -15,11 +15,14 @@ import { fmtBytes } from '../../core/util/fmt.ts';
 import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue';
 import { cfg } from '../../core/config.ts';
 import { i18n } from '../../core/i18n/index.ts';
+import { tr } from '../../core/i18n/tr.ts';
 import { chat } from '../../core/state/chatSlice.ts';
 import { prefs } from '../../core/state/prefsSlice.ts';
 import { toast } from '../../ui/toast.ts';
+import { sessionSetPermission, type PermissionMode } from '../../core/api/endpoints.ts';
 import Icon from '../../ui/components/Icon.vue';
 import BubbleSurface from '../../ui/components/BubbleSurface.vue';
+import { DropdownMenuRoot, DropdownMenuTrigger, DropdownMenuPortal, DropdownMenuContent, DropdownMenuItem } from 'reka-ui';
 import { usePageActivity } from '../../ui/composables/usePageActivity.ts';
 import AskContext from './AskContext.vue';
 import { useComposerHeight } from './useComposerHeight.ts';
@@ -70,6 +73,14 @@ function fill(v: string, attachmentsToFill?: any[]) {
 }
 
 defineExpose({ focus: () => ta.value?.focus(), fill });
+
+// 修改 (edit) rewinds the thread and hands the original message back as a
+// draft; consume the store's prefill once, so it never replays later.
+watch(() => chat.prefill.value, (value) => {
+  if (!value || value.sessionId !== props.sessionId) return;
+  chat.prefill.value = null;
+  fill(value.text, value.attachments);
+});
 
 const sizing = useComposerHeight(composerEl);
 const height = computed(() => sizing.height());
@@ -258,6 +269,36 @@ async function pickAttachment(kind: 'image' | 'file', event: MouseEvent) {
   }
 }
 
+// Permission mode: operate/ask/read_only, switchable any time — even mid-run,
+// because the server gates each tool call as it starts.
+const permissionModes: { value: PermissionMode; icon: string; label: () => string; hint: () => string }[] = [
+  { value: 'operate', icon: 'zap', label: () => tr('自动执行', 'Auto-execute'), hint: () => tr('工具与命令自动执行', 'Tools and commands run automatically') },
+  { value: 'ask', icon: 'circle-question-mark', label: () => tr('每次询问', 'Ask every time'), hint: () => tr('副作用操作需要确认后执行', 'Side-effect operations need confirmation') },
+  { value: 'read_only', icon: 'eye', label: () => tr('只读', 'Read only'), hint: () => tr('禁止执行修改类工具', 'Modifying tools are blocked') },
+];
+const optimisticPermission = ref<PermissionMode | null>(null);
+const permissionBusy = ref(false);
+const sessionPermission = computed<PermissionMode>(() =>
+  props.start ? 'operate' : optimisticPermission.value ?? chat.snapshot.value?.permission ?? 'operate');
+const currentPermission = computed(
+  () => permissionModes.find((mode) => mode.value === sessionPermission.value) ?? permissionModes[0]);
+async function selectPermission(mode: PermissionMode) {
+  if (props.start || permissionBusy.value || mode === sessionPermission.value) return;
+  const revert = optimisticPermission.value;
+  optimisticPermission.value = mode;
+  permissionBusy.value = true;
+  try {
+    const next = await sessionSetPermission(props.sessionId, mode);
+    if (chat.sessionId.value === props.sessionId) chat.snapshot.value = next;
+  } catch (error: any) {
+    optimisticPermission.value = revert;
+    toast(String(error?.detail || error?.message || error));
+  } finally {
+    permissionBusy.value = false;
+    if (sessionPermission.value === mode) optimisticPermission.value = null;
+  }
+}
+
 const interrupting = ref(false);
 async function onStop() {
   if (!running.value || sending.value || interrupting.value) return;
@@ -369,6 +410,21 @@ const { startComposerDrag, resizeKeys } = useComposerDrag(sizing, height);
       <div v-if="!mobile" class="composer-footer-actions">
         <Hint :text="i18n.t('chat.image')"><button class="btn ghost icon-only" :aria-label="i18n.t('chat.image')" @click="pickAttachment('image', $event)"><Icon name="image" /></button></Hint>
         <Hint :text="i18n.t('chat.attach')"><button class="btn ghost icon-only" :aria-label="i18n.t('chat.attach')" @click="pickAttachment('file', $event)"><Icon name="paperclip" /></button></Hint>
+        <DropdownMenuRoot v-if="!start" :modal="false">
+          <DropdownMenuTrigger class="btn ghost permission-trigger" :aria-label="tr('权限模式', 'Permission mode')"
+            :title="`${tr('权限模式', 'Permission mode')} · ${currentPermission.hint()}`">
+            <Icon :name="currentPermission.icon" /><span class="permission-label">{{ currentPermission.label() }}</span>
+          </DropdownMenuTrigger>
+          <DropdownMenuPortal v-if="pageActive">
+            <DropdownMenuContent class="menu-pop permission-menu" align="start" :side-offset="4" :collision-padding="8">
+              <DropdownMenuItem v-for="option in permissionModes" :key="option.value" class="menu-item"
+                :data-active="option.value === sessionPermission" @select="selectPermission(option.value)">
+                <Icon :name="option.icon" class="permission-option-icon" />
+                <span class="permission-option-text"><span>{{ option.label() }}</span><small>{{ option.hint() }}</small></span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenuPortal>
+        </DropdownMenuRoot>
       </div>
       <div v-if="$slots['footer-start']" class="composer-footer-start"><slot name="footer-start" /></div>
       <Hint v-if="queueable" :text="i18n.t('chat.queueSend')"><button class="send-btn" :disabled="sending"
@@ -395,6 +451,15 @@ const { startComposerDrag, resizeKeys } = useComposerDrag(sizing, height);
 <style scoped>
 .composer { position: relative; }
 .composer-footer-actions { display:flex; align-items:center; gap:2px; margin-right:auto; }
+.permission-trigger { display:inline-flex; align-items:center; gap:5px; height:32px; padding:0 9px;
+  flex:none; font-size:11.5px; font-weight:600; color:var(--fg-subtle); }
+.permission-trigger .icon { width:14px; height:14px; }
+.permission-trigger[data-state='open'] { background:var(--bg-hover); color:var(--fg); }
+.permission-menu .menu-item { display:flex; align-items:center; gap:9px; padding:8px 10px; font-size:12.5px; }
+.permission-menu .menu-item[data-active='true'] { color: var(--accent); }
+.permission-option-icon { width:14px; height:14px; flex:none; }
+.permission-option-text { display:flex; flex-direction:column; gap:1px; min-width:0; }
+.permission-option-text small { color:var(--fg-faint); font-size:10.5px; font-weight:500; }
 .composer-footer-start { margin-right:auto; min-width:0; max-width:calc(100% - 52px); }
 .composer-btw{height:32px;min-height:32px;padding:0 9px;flex:none;font-size:11px;font-weight:700;letter-spacing:.05em;color:var(--fg-subtle)}
 .composer-btw[aria-expanded='true']{background:var(--bg-hover);color:var(--fg)}

@@ -102,6 +102,7 @@ impl Session {
       reasoning: request.reasoning,
       cache: request.cache,
       run: Default::default(),
+      permission: Default::default(),
       compaction: None,
       goal: None,
     };

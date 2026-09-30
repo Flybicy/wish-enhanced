@@ -24,13 +24,15 @@ pub struct RetryPolicy {
 }
 
 impl Default for RetryPolicy {
+  /// Six attempts without jitter: the waits double from 10s through 80s, and the fifth retry's
+  /// 160s is capped at 150s, so a logical call waits out at most five minutes before giving up.
   fn default() -> Self {
     Self {
-      max_attempts: 3,
-      initial_delay_ms: 500,
-      max_delay_ms: 30_000,
+      max_attempts: 6,
+      initial_delay_ms: 10_000,
+      max_delay_ms: 150_000,
       multiplier: 2.0,
-      jitter_ratio: 1.0,
+      jitter_ratio: 0.0,
     }
   }
 }
@@ -108,4 +110,21 @@ fn generate_random_unit() -> f64 {
   let mixed = nanos.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(u64::from(std::process::id()));
   let shifted = mixed ^ (mixed >> 30);
   ((shifted % (1u64 << 53)) as f64) / ((1u64 << 53) as f64)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// The default waits double from 10s, and the fifth retry's 160s is capped at 150s. Without
+  /// jitter the cadence is exact, so one logical call spends at most 10+20+40+80+150 seconds
+  /// waiting between its six attempts.
+  #[test]
+  fn default_backoff_doubles_then_caps() {
+    let policy = RetryPolicy::default();
+    assert_eq!(policy.max_attempts, 6);
+    assert_eq!(policy.jitter_ratio, 0.0);
+    let delays: Vec<u64> = (1..=5).map(|n| policy.calculate_backoff_ms(n, None)).collect();
+    assert_eq!(delays, [10_000, 20_000, 40_000, 80_000, 150_000]);
+  }
 }

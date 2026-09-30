@@ -5,13 +5,17 @@ use std::path::PathBuf;
 
 #[derive(Deserialize)]
 pub struct DirectoryQuery {
+  // Empty (or absent) path is the sentinel for the roots view.
+  #[serde(default)]
   path: String,
 }
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct DirectoryListing {
   path: String,
   parent: Option<String>,
   directories: Vec<String>,
+  #[serde(default)]
+  root: bool,
 }
 
 // Windows `canonicalize` returns `\\?\`-prefixed verbatim paths. They are
@@ -33,8 +37,35 @@ fn display_path(path: PathBuf) -> PathBuf {
   }
 }
 
+// `X:\` style drive root: the one Windows path whose `parent()` is None
+// that still has somewhere to climb to — the roots view.
+fn is_drive_root(path: &str) -> bool {
+  let bytes = path.as_bytes();
+  bytes.len() == 3
+    && bytes[0].is_ascii_alphabetic()
+    && bytes[1] == b':'
+    && (bytes[2] == b'\\' || bytes[2] == b'/')
+}
+
+// The roots view: every drive letter that answers a probe, so the picker can
+// start above any single drive.
+fn roots_listing() -> DirectoryListing {
+  DirectoryListing {
+    path: String::new(),
+    parent: None,
+    root: true,
+    directories: ('A'..='Z')
+      .filter(|letter| std::fs::metadata(format!("{letter}:\\")).is_ok())
+      .map(|letter| format!("{letter}:\\"))
+      .collect(),
+  }
+}
+
 pub async fn list(Query(query): Query<DirectoryQuery>) -> Result<Json<DirectoryListing>, ApiError> {
   blocking(move || {
+    if query.path.is_empty() {
+      return Ok(Json(roots_listing()));
+    }
     let path = if query.path == "~" {
       PathBuf::from(
         std::env::var_os("HOME")
@@ -65,18 +96,66 @@ pub async fn list(Query(query): Query<DirectoryQuery>) -> Result<Json<DirectoryL
       }
     }
     directories.sort_unstable();
+    let text = path.to_string_lossy().into_owned();
+    let parent = match path.parent() {
+      Some(parent) => Some(parent.to_string_lossy().into_owned()),
+      // A drive root climbs to the roots view; UNC shares stay put.
+      None if is_drive_root(&text) => Some(String::new()),
+      None => None,
+    };
     Ok(Json(DirectoryListing {
-      parent: path.parent().map(|p| p.to_string_lossy().into_owned()),
-      path: path.to_string_lossy().into_owned(),
+      parent,
+      path: text,
+      root: false,
       directories,
     }))
   })
   .await
 }
 
+#[derive(Deserialize)]
+pub struct CreateDirectoryRequest {
+  path: String,
+  name: String,
+}
+
+#[derive(Serialize)]
+pub struct CreatedDirectory {
+  path: String,
+}
+
+// A folder name fit for joining: non-empty after trim, no path separators,
+// no dot-only climb. Returns the trimmed name on success.
+fn validate_directory_name(name: &str) -> Result<String, ApiError> {
+  let trimmed = name.trim();
+  if trimmed.is_empty() || trimmed == "." || trimmed == ".." || trimmed.contains('/') || trimmed.contains('\\') {
+    return Err(ApiError::bad_request("Invalid directory name"));
+  }
+  Ok(trimmed.to_owned())
+}
+
+pub async fn create(Json(request): Json<CreateDirectoryRequest>) -> Result<Json<CreatedDirectory>, ApiError> {
+  blocking(move || {
+    let name = validate_directory_name(&request.name)?;
+    let base = PathBuf::from(&request.path);
+    if !base.is_absolute() {
+      return Err(ApiError::bad_request("Directory path must be absolute"));
+    }
+    let joined = base.join(&name);
+    std::fs::create_dir_all(&joined)
+      .map_err(|error| ApiError::bad_request(format!("Cannot create directory: {error}")))?;
+    let created = match joined.canonicalize() {
+      Ok(canonical) => display_path(canonical),
+      Err(_) => joined,
+    };
+    Ok(Json(CreatedDirectory { path: created.to_string_lossy().into_owned() }))
+  })
+  .await
+}
+
 #[cfg(test)]
 mod tests {
-  use super::display_path;
+  use super::{display_path, is_drive_root, roots_listing, validate_directory_name};
   use std::path::PathBuf;
 
   #[test]
@@ -93,5 +172,29 @@ mod tests {
   fn long_verbatim_paths_stay_verbatim() {
     let long = format!(r"\\?\C:\{}", "x".repeat(300));
     assert_eq!(display_path(PathBuf::from(long.clone())), PathBuf::from(long));
+  }
+
+  #[test]
+  fn drive_roots_are_recognized_for_parenting() {
+    assert!(is_drive_root(r"C:\"));
+    assert!(!is_drive_root(r"C:\Projects"));
+    assert!(!is_drive_root(r"\\server\share"));
+  }
+
+  #[test]
+  fn roots_listing_marks_root_and_lists_drives() {
+    let listing = roots_listing();
+    assert!(listing.root);
+    assert!(listing.path.is_empty());
+    assert!(listing.parent.is_none());
+    assert!(listing.directories.iter().any(|entry| entry.contains(':')));
+  }
+
+  #[test]
+  fn folder_names_are_validated() {
+    for name in ["", "  ", ".", "..", "a/b", "a\\b"] {
+      assert!(validate_directory_name(name).is_err(), "{name:?} must be rejected");
+    }
+    assert_eq!(validate_directory_name(" 新项目 ").unwrap(), "新项目");
   }
 }

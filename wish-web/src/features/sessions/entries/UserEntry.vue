@@ -25,7 +25,7 @@ const entryId = computed<number | null>(() => {
   const id = props.item.entry?.id;
   return typeof id === 'number' ? id : null;
 });
-const { canAct, rewind, branch } = useTurnActions();
+const { canAct, rewind, branch, regenerate, edit } = useTurnActions();
 // Rewind drops later turns from the live thread, so it arms on the first click
 // and commits on the second; it disarms itself after a few seconds.
 const armed = ref(false);
@@ -47,6 +47,12 @@ function onBranch() {
   const id = entryId.value;
   if (id != null) void branch(id);
 }
+function onRegenerate() {
+  if (entryId.value != null) void regenerate(props.item.entry);
+}
+function onEdit() {
+  if (entryId.value != null) void edit(props.item.entry);
+}
 </script>
 <template>
   <div class="user-message-parts">
@@ -66,6 +72,16 @@ function onBranch() {
         :title="tr('从此处分支出新会话', 'Branch a new session from here')" @click="onBranch">
         <Icon name="git-branch" />
         <span>{{ tr('分支', 'Branch') }}</span>
+      </button>
+      <button type="button" class="turn-action" :disabled="!canAct"
+        :title="tr('丢弃回复并重新发送这条消息', 'Drop the reply and resend this message')" @click="onRegenerate">
+        <Icon name="refresh-cw" />
+        <span>{{ tr('重新回复', 'Regenerate') }}</span>
+      </button>
+      <button type="button" class="turn-action" :disabled="!canAct"
+        :title="tr('回到输入框修改这条消息', 'Back to the composer to edit this message')" @click="onEdit">
+        <Icon name="pencil" />
+        <span>{{ tr('修改', 'Edit') }}</span>
       </button>
     </div>
   </div>

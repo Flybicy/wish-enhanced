@@ -18,11 +18,12 @@ import { tr } from './fields.ts';
 const props=defineProps<{id:string;value:ProviderConfig;preset?:ProviderPreset}>();
 const editing=ref(false),originalId=ref(''),modelId=ref(''),draft=ref<Record<string,any>>({});
 const allowUnknownId=ref(false);
-const catalogOpen=ref(false),catalogBusy=ref(false),catalogFailed=ref(false),catalog=ref<any[]>([]);
+const catalogOpen=ref(false),catalogBusy=ref(false),catalogFailed=ref(false),catalogFetched=ref(0),catalog=ref<any[]>([]);
 const catalogModal=ref<InstanceType<typeof Modal>>();
 let catalogRequest=0;
 let catalogController: AbortController | undefined;
-onScopeDispose(() => { catalogRequest++; catalogController?.abort(); });
+let catalogFetchedTimer: ReturnType<typeof setTimeout> | undefined;
+onScopeDispose(() => { catalogRequest++; catalogController?.abort(); clearTimeout(catalogFetchedTimer); });
 let customAfterCatalog=false;
 const advanced=ref(''),advancedChanged=ref(false),editSource=ref('');
 const modelDirty=computed(()=>JSON.stringify([modelId.value,draft.value])!==editSource.value||(advancedChanged.value&&advanced.value!==JSON.stringify(draft.value,null,2)));
@@ -121,6 +122,7 @@ function apply(close=true){try{
   }
   const value=advancedChanged.value?JSON.parse(advanced.value):draft.value;
   if(!value||typeof value!=='object'||Array.isArray(value))throw new Error(tr('模型属性必须是 JSON 对象。','Model metadata must be a JSON object.'));
+  if(typeof value.display_name==='string'){const displayName=value.display_name.trim();if(displayName)value.display_name=displayName;else delete value.display_name;}
   if(!originalId.value&&allowUnknownId.value&&catalog.value.length&&!catalog.value.some(model=>model.id===id))value.custom_model_id=true;
   for(const field of ['context_window_tokens','max_output_tokens'])if(value[field]!=null&&(!Number.isSafeInteger(value[field])||value[field]<=0))throw new Error(tr('Token 上限必须是正整数。','Token limits must be positive integers.'));
   if(value.reasoning_efforts!=null&&(typeof value.reasoning_efforts!=='object'||Array.isArray(value.reasoning_efforts)))throw new Error(tr('思考等级必须是对象格式。','Reasoning efforts must be an object.'));
@@ -132,14 +134,14 @@ async function readCatalog(){
   catalogController?.abort();
   catalogController = new AbortController();
   const key=`catalog-models:${props.id}`;
-  catalogOpen.value=true;catalogFailed.value=false;
+  catalogOpen.value=true;catalogFailed.value=false;catalogFetched.value=0;
   const cached=peekCached<any[]>(key)??await readCached<any[]>(key);
   if(request!==catalogRequest)return;
   if(cached)catalog.value=cached;
   catalogBusy.value=!cached;
   try{
     const models = await readCatalogModels(props.id, catalogController.signal);
-    if(request===catalogRequest){catalog.value=models;writeCached(key,models);}
+    if(request===catalogRequest){catalog.value=models;writeCached(key,models);catalogFetched.value=models.length;clearTimeout(catalogFetchedTimer);catalogFetchedTimer=setTimeout(()=>catalogFetched.value=0,2500);}
   }catch(e){if(request===catalogRequest){catalogFailed.value=true;if(!cached)showError({title:tr('无法读取模型目录','Could not read the model catalog'),error:e,hint:tr('新添加的提供商需要先保存配置。','Save newly added providers first.'),action:{label:tr('重试','Retry'),run:readCatalog}});}
   }finally{if(request===catalogRequest)catalogBusy.value=false;}
 }
@@ -147,7 +149,8 @@ function importModel(id:string){
   if(catalogBusy.value||props.value.models[id])return;
   const model=catalog.value.find(item=>item.id===id);
   if(!model)return;
-  props.value.models[id]=withNewModelDefaults({context_window_tokens:model.context_window,max_output_tokens:model.max_output_tokens??props.preset?.max_output_tokens,supports_reasoning:model.supports_reasoning,default_reasoning_effort:model.default_reasoning_effort,reasoning_efforts:model.reasoning_efforts});
+  const name=typeof model.name==='string'?model.name.trim():'';
+  props.value.models[id]=withNewModelDefaults({...(name&&name!==id?{display_name:name}:{}),context_window_tokens:model.context_window,max_output_tokens:model.max_output_tokens??props.preset?.max_output_tokens,supports_reasoning:model.supports_reasoning,default_reasoning_effort:model.default_reasoning_effort,reasoning_efforts:model.reasoning_efforts});
   catalogOpen.value=false;
 }
 // Always try the upstream catalog first: saved providers without a configured
@@ -172,13 +175,17 @@ function modelFacts(model:Record<string,any>){
   if(model.reasoning_efforts)facts.push({label:tr('思考','Reasoning'),value:Object.keys(model.reasoning_efforts).join(' · ')});
   return facts;
 }
+// Token presets mirror the sizes upstreams publish; the active chip clears back to unset.
+const contextPresets=[{label:'32K',value:32768},{label:'64K',value:65536},{label:'128K',value:131072},{label:'200K',value:200000},{label:'256K',value:262144},{label:'400K',value:400000},{label:'512K',value:524288},{label:'1M',value:1048576}];
+const outputPresets=[{label:'4K',value:4096},{label:'8K',value:8192},{label:'16K',value:16384},{label:'32K',value:32768},{label:'64K',value:65536},{label:'128K',value:131072}];
+function setTokenLimit(field:'context_window_tokens'|'max_output_tokens',value:number){draft.value[field]=draft.value[field]===value?null:value;}
 const choices=computed(()=>catalog.value.map(model=>({key:model.id,title:modelLabel(model.id),search:model.id,brand:props.preset?.provider,disabled:!!props.value.models[model.id],description:props.value.models[model.id]?tr('已添加','Already added'):undefined})));
 </script>
 <template>
   <div class="models-editor">
     <p v-if="!Object.keys(value.models).length" class="hint">{{tr('未配置模型，可手动添加或从上游目录选择。','No configured models. Add one manually or choose from the upstream catalog.')}}</p>
     <div v-for="(model,name) in value.models" :key="name" class="model-row">
-      <button class="model-edit" :aria-label="tr('编辑模型 ','Edit model ')+name" @click="edit(String(name))"><span class="model-title"><strong>{{modelLabel(String(name))}}</strong><code>{{name}}</code></span><span v-if="modelFacts(model).length" class="model-facts"><span v-for="fact in modelFacts(model)" :key="fact.label" class="model-fact" :title="fact.exact"><span>{{fact.label}}</span>{{fact.value}}</span></span></button>
+      <button class="model-edit" :aria-label="tr('编辑模型 ','Edit model ')+name" @click="edit(String(name))"><span class="model-title"><strong>{{model.display_name||modelLabel(String(name))}}</strong><code>{{name}}</code></span><span v-if="modelFacts(model).length" class="model-facts"><span v-for="fact in modelFacts(model)" :key="fact.label" class="model-fact" :title="fact.exact"><span>{{fact.label}}</span>{{fact.value}}</span></span></button>
       <Hint :text="tr('编辑模型','Edit model')"><button class="btn ghost icon-only" :aria-label="tr('编辑模型配置 ','Edit model configuration ')+name" @click="edit(String(name))"><Icon name="pencil"/></button></Hint>
       <Hint :text="tr('删除模型','Delete model')"><button class="btn ghost icon-only model-remove" :aria-label="tr('删除模型 ','Delete model ')+name" @click="delete value.models[name]"><Icon name="trash-2"/></button></Hint>
     </div>
@@ -186,9 +193,22 @@ const choices=computed(()=>catalog.value.map(model=>({key:model.id,title:modelLa
 
       <div class="model-form">
         <label>{{tr('模型 ID','Model ID')}}<input class="input" v-model="modelId" autocomplete="off" spellcheck="false"/></label>
+        <label>{{tr('显示名称','Display name')}}<input class="input" v-model="draft.display_name" autocomplete="off" spellcheck="false" :placeholder="modelId"/></label>
         <div v-if="!originalId && catalog.length && modelId.trim() && !catalog.some(model=>model.id===modelId.trim())" class="model-toggle"><span>{{tr('确认使用目录外的自定义 ID','Use this custom ID outside the catalog')}}</span><SwitchRoot v-model="allowUnknownId" class="cfg-switch" :aria-label="tr('确认使用目录外的自定义 ID','Use this custom ID outside the catalog')"><SwitchThumb class="cfg-switch-thumb"/></SwitchRoot></div>
-        <label>{{tr('上下文窗口','Context window')}}<input class="input" type="number" min="1" :value="draft.context_window_tokens??''" @input="draft.context_window_tokens=($event.target as HTMLInputElement).value?Number(($event.target as HTMLInputElement).value):null"/></label>
-        <label>{{tr('最大输出 Token','Maximum output tokens')}}<input class="input" type="number" min="1" :value="draft.max_output_tokens??''" @input="draft.max_output_tokens=($event.target as HTMLInputElement).value?Number(($event.target as HTMLInputElement).value):null"/></label>
+        <div class="model-field">
+          <label for="model-context-tokens">{{tr('上下文窗口','Context window')}}</label>
+          <div class="token-editor">
+            <input id="model-context-tokens" class="input" type="number" min="1" :value="draft.context_window_tokens??''" @input="draft.context_window_tokens=($event.target as HTMLInputElement).value?Number(($event.target as HTMLInputElement).value):null"/>
+            <div class="token-presets"><button v-for="preset in contextPresets" :key="preset.value" type="button" class="chip effort-chip" :class="{active:draft.context_window_tokens===preset.value}" @click="setTokenLimit('context_window_tokens',preset.value)">{{preset.label}}</button></div>
+          </div>
+        </div>
+        <div class="model-field">
+          <label for="model-max-tokens">{{tr('最大输出 Token','Maximum output tokens')}}</label>
+          <div class="token-editor">
+            <input id="model-max-tokens" class="input" type="number" min="1" :value="draft.max_output_tokens??''" @input="draft.max_output_tokens=($event.target as HTMLInputElement).value?Number(($event.target as HTMLInputElement).value):null"/>
+            <div class="token-presets"><button v-for="preset in outputPresets" :key="preset.value" type="button" class="chip effort-chip" :class="{active:draft.max_output_tokens===preset.value}" @click="setTokenLimit('max_output_tokens',preset.value)">{{preset.label}}</button></div>
+          </div>
+        </div>
         <label>{{tr('思考能力','Reasoning support')}}<SelectField mobile-page :model-value="draft.supports_reasoning==null?'unknown':String(draft.supports_reasoning)" :options="[{value:'unknown',label:tr('未指定','Unspecified')},{value:'true',label:tr('支持','Supported')},{value:'false',label:tr('不支持','Unsupported')}]" @update:model-value="$event==='unknown'?delete draft.supports_reasoning:draft.supports_reasoning=$event==='true'"/></label>
         <div v-if="draft.supports_reasoning!==false" class="model-field efforts-field">
           <label for="model-reasoning-efforts">{{tr('支持的思考等级','Supported reasoning efforts')}}</label>
@@ -243,6 +263,7 @@ const choices=computed(()=>catalog.value.map(model=>({key:model.id,title:modelLa
         <template #status>
           <p v-if="catalogFailed" class="catalog-status hint">{{catalog.length?tr('刷新失败，显示的是上次读取的目录。','Refresh failed; showing the last catalog read.'):tr('未能读取模型目录，可以点击刷新重试，或使用自定义模型。','The catalog could not be read. Reload to retry, or add a custom model.')}}</p>
           <p v-else-if="catalogBusy" class="catalog-status hint" role="status">{{tr('正在读取…','Loading…')}}</p>
+          <p v-else-if="catalogFetched" class="catalog-status hint" role="status">{{tr(`成功拉取 ${catalogFetched} 个模型`,`Fetched ${catalogFetched} models`)}}</p>
         </template>
       </PickerList>
     </Modal>
@@ -254,6 +275,8 @@ const choices=computed(()=>catalog.value.map(model=>({key:model.id,title:modelLa
 .model-facts{display:flex;flex-wrap:wrap;gap:6px}.model-fact{display:inline-flex;align-items:baseline;gap:6px;padding:2px 8px;border-radius:6px;background:var(--bg-sunken);font-size:12px;line-height:1.6;color:var(--fg-muted);font-variant-numeric:tabular-nums}.model-fact span{color:var(--fg-subtle)}
 .model-form label,.model-form .model-field{display:flex;flex-direction:column;gap:6px}.model-form .inline{flex-direction:row;align-items:center}.model-form .input{width:100%;min-width:0}.model-form summary{cursor:pointer}
 .efforts-editor{display:flex;flex-direction:column;gap:8px;min-width:0;width:100%}
+.token-editor{display:flex;flex-direction:column;gap:8px;min-width:0;width:100%}
+.token-presets{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .efforts-chips{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .effort-chip{cursor:pointer;user-select:none;font-family:var(--font-mono,inherit);display:inline-flex;align-items:center;justify-content:center;padding:5px 12px;min-height:28px;font-size:12px;border-radius:6px;transition:color var(--dur-fast),background var(--dur-fast),border-color var(--dur-fast)}
 @media (hover: hover) { .effort-chip:hover:not(.active){background:var(--bg-hover);color:var(--fg)} }

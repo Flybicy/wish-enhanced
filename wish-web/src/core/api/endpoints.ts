@@ -16,11 +16,15 @@ export interface MessageBlock { type: string; blob_id: string; filename?: string
 export interface QueuedAttachment { kind: string; blob_id: string; filename?: string | null; byte_count?: number; placeholder?: string }
 export interface QueuedDelivery { id: string; state: 'queued'; text: string; attachments: QueuedAttachment[] }
 export interface ShellSettings { program: string; args: string[] | null }
+// How side-effect tools may run; the server refuses them in read_only, and asks first in ask.
+export type PermissionMode = 'operate' | 'ask' | 'read_only';
+// The frame the session's event stream sends while a tool call awaits the user's decision.
+export interface ApprovalFrame { type: 'approval_required'; call_id: string; name: string; summary: string }
 export interface BlobInfo { id: string; mime_type: string; byte_count: number }
 export interface UploadedBlob extends BlobInfo { sha256: string }
 export interface EffectiveConfig { defaults: { provider: string; model: string; reasoning?: { effort?: string }; instructions: string; cwd: string; shell: boolean } }
 export interface DefaultModel { provider: string; model: string; reasoning_effort?: string }
-export interface DirectoryListing { path: string; parent: string | null; directories: string[] }
+export interface DirectoryListing { path: string; parent: string | null; directories: string[]; root?: boolean }
 export interface UsageTotals {
   usage_records: number;
   committed_responses: number;
@@ -142,10 +146,20 @@ export const sessionCompact = (id: string) => post(`${path(id)}/compact`);
 export const sessionClearContext = (id: string) => post(`${path(id)}/context/clear`);
 // No entry: fork the whole conversation. With an entry id: branch from that turn.
 export const sessionFork = async (id: string, entryId?: number) => sessionView(await post(`${path(id)}/fork`, entryId == null ? {} : { entry_id: entryId }));
-// Rewind the live thread: drop everything after the given entry.
-export const sessionRewind = async (id: string, entryId: number) => sessionView(await post(`${path(id)}/rewind`, { entry_id: entryId }));
+// Rewind the live thread: drop everything after the given entry. No entry id
+// rewinds to an empty thread, so the first message can be resent or edited.
+export const sessionRewind = async (id: string, entryId?: number) => sessionView(await post(`${path(id)}/rewind`, entryId == null ? {} : { entry_id: entryId }));
+// Ordered EntryIds of one context generation; the active one is the live thread
+// (snapshot.status.active_generation), sealed ones keep rewound-away turns.
+export const generationEntries = async (id: string, generation: number, params?: { start?: number; limit?: number }, opts?: EndpointOptions): Promise<{ start: number; items: number[]; next: number | null }> =>
+  get(`${path(id)}/generations/${generation}/entries`, { query: { start: params?.start ?? 0, limit: params?.limit ?? 1000 }, ...opts });
 // Set (goal string) or clear (null) the session's persistent objective; it rides every request as a pinned instruction.
 export const sessionSetGoal = async (id: string, goal: string | null) => sessionView(await post(`${path(id)}/goal`, { goal }));
+// Switch the permission mode; unlike the config it is accepted while a run is active.
+export const sessionSetPermission = async (id: string, mode: PermissionMode, revision?: number | null, opts?: EndpointOptions) => sessionView(await post(`${path(id)}/permission`, { mode }, revisionOptions(revision, opts)));
+// Resolve a pending ask-mode approval; fails with 404 when nothing is waiting for the call.
+export const sessionApproveTool = (id: string, callId: string, approve: boolean, opts?: EndpointOptions): Promise<{ status: string }> =>
+  post(`${path(id)}/approvals/${encodeURIComponent(callId)}`, { approve }, opts);
 export async function deliveriesList(id: string, params?: { limit?: number }, opts?: EndpointOptions): Promise<{ items: QueuedDelivery[]; has_more: boolean }> {
   const snap = await sessionGet(id, opts);
   const page = await get(`${path(id)}/queue`, {query:{start:snap.status.queue_head,limit:params?.limit ?? 50},...opts});
@@ -191,3 +205,4 @@ export const usageSeries = (id: string | undefined,params: SeriesQuery,opts?: En
 export const usageDaily = (id: string | undefined,params: DailyQuery,opts?: EndpointOptions): Promise<UsageDailyResponse> => get(id?`${path(id)}/usage/daily`:'/usage/daily',{query:params,...opts});
 
 export const directoriesList = (path: string): Promise<DirectoryListing> => get("/directories", { query: { path } });
+export const directoriesCreate = (path: string, name: string): Promise<{ path: string }> => post("/directories/create", { path, name });

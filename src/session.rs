@@ -11,7 +11,7 @@ mod persistence;
 mod queue;
 pub mod statistics;
 
-pub use config::{RunOptions, SessionConfig, ToolMode};
+pub use config::{PermissionMode, RunOptions, SessionConfig, ToolMode};
 pub use context::{CompactionConfig, CompactionReason, Generation, GenerationId, GenerationStatus};
 pub use control::SessionHandle;
 pub use error::SessionError;

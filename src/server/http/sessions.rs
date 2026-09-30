@@ -7,7 +7,7 @@ use crate::{
   executor::ExecutionControl,
   protocol::Message,
   session::{
-    EntryId, SessionConfig,
+    EntryId, PermissionMode, SessionConfig,
     history::query::{HistoryFilter, HistoryPageRequest, HistorySearch},
   },
   storage::{ReadList, StoredValue},
@@ -15,7 +15,7 @@ use crate::{
 use axum::{
   Json,
   extract::{Path, Query, State},
-  http::StatusCode,
+  http::{HeaderMap, StatusCode},
   response::{
     Sse,
     sse::{Event, KeepAlive},
@@ -124,6 +124,68 @@ pub async fn set_goal(
 pub struct SessionGoalRequest {
   #[serde(default)]
   pub goal: Option<String>,
+}
+
+/// Body: `{"mode": "operate" | "ask" | "read_only"}`. The permission mode may
+/// switch while the session runs; it gates subsequent tool calls.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionPermissionRequest {
+  pub mode: String,
+}
+pub async fn set_permission(
+  State(app): State<Arc<App>>,
+  Path(id): Path<String>,
+  headers: HeaderMap,
+  Json(request): Json<SessionPermissionRequest>,
+) -> Result<Json<Value>, ApiError> {
+  app.require_open()?;
+  let mode = match request.mode.as_str() {
+    "operate" => PermissionMode::Operate,
+    "ask" => PermissionMode::Ask,
+    "read_only" => PermissionMode::ReadOnly,
+    _ => {
+      return Err(ApiError::bad_request(format!(
+        "invalid permission mode: {}",
+        request.mode
+      )))
+    }
+  };
+  let slot = app.get_session(&id).await?;
+  if let Some(revision) = headers.get("if-match") {
+    let descriptor = slot.get_descriptor();
+    if revision.to_str().ok() != Some(descriptor.revision.to_string().as_str()) {
+      return Err(ApiError::conflict("session changed; reload before saving"));
+    }
+  }
+  blocking(move || {
+    slot.require_live()?;
+    slot.set_permission(mode)?;
+    Ok(Json(slot.describe()))
+  })
+  .await
+}
+
+/// Body: `{"approve": bool}`. Resolves a pending ask-mode approval; 404 when
+/// no such approval is waiting.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalDecision {
+  pub approve: bool,
+}
+pub async fn resolve_approval(
+  State(app): State<Arc<App>>,
+  Path((id, call_id)): Path<(String, String)>,
+  Json(decision): Json<ApprovalDecision>,
+) -> Result<Json<Value>, ApiError> {
+  app.require_open()?;
+  app.get_session(&id).await?;
+  let sender = app.approvals.lock().unwrap().remove(&(id, call_id));
+  let Some(sender) = sender else {
+    return Err(ApiError::not_found());
+  };
+  let _ = sender.send(decision.approve);
+  Ok(Json(json!({"status":"resolved"})))
 }
 
 /// Body: `{"program", "args"}` for the session's own shell, or null to follow the application's.

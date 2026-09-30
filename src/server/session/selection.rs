@@ -127,7 +127,9 @@ impl SessionSlot {
       let provider = app
         .get_provider(&pending.provider)
         .map_err(|e| SessionError::InvalidCompaction(e.to_string()))?;
-      let next_model = self.make_model(provider, pending.provider.clone());
+      let next_model = self
+        .make_model(provider, pending.provider.clone())
+        .with_goal_retry(has_goal(&pending.config));
       let mut translated = None;
       if !next_model.supports_upstream_compaction() {
         let old_request = session.build_request()?;

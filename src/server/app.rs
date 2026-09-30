@@ -9,7 +9,7 @@ use crate::{
   storage::{Storage, StorageOptions},
 };
 use std::{
-  collections::BTreeMap,
+  collections::{BTreeMap, HashMap},
   path::PathBuf,
   sync::{Arc, Mutex, RwLock},
 };
@@ -51,6 +51,9 @@ pub struct App {
   pub subagents: Arc<crate::server::subagents::SubagentManager>,
   /// Whether the configuration enables subagent delegation.
   pub subagents_enabled: bool,
+  /// Pending ask-mode approvals, keyed by (session id, tool call id). The
+  /// sender resolves the waiting tool executor; removal cancels nothing.
+  pub(crate) approvals: Mutex<HashMap<(String, String), tokio::sync::oneshot::Sender<bool>>>,
 }
 impl App {
   pub async fn open(config: &Config, config_path: PathBuf) -> Result<Arc<Self>, ApiError> {
@@ -211,6 +214,7 @@ impl App {
       memory,
       subagents,
       subagents_enabled,
+      approvals: Mutex::new(HashMap::new()),
     });
     crate::server::codex_login::start_refresh_worker(&app);
     Ok(app)

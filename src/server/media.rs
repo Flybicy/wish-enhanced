@@ -16,6 +16,7 @@ use std::{
     Arc,
     atomic::{AtomicBool, Ordering},
   },
+  time::Duration,
 };
 
 pub const AGENT_INSTRUCTIONS: &str =
@@ -40,12 +41,18 @@ pub fn apply_agent_instructions(messages: &mut Vec<Message>) {
     );
   }
 }
+/// The pause between model-call attempts while the session carries a goal: a set goal means a
+/// retryable failure is waited out and tried again, without end, at a steady cadence rather than
+/// a growing one.
+const GOAL_RETRY_INTERVAL: Duration = Duration::from_secs(15);
+
 pub struct SessionModel {
   provider: Arc<Provider>,
   provider_id: String,
   client: ModelClient,
   directory: PathBuf,
   rejected: AtomicBool,
+  goal_retry: bool,
 }
 impl SessionModel {
   pub fn new(provider: Arc<Provider>, provider_id: String, directory: PathBuf) -> Self {
@@ -55,10 +62,18 @@ impl SessionModel {
       provider_id,
       directory,
       rejected: AtomicBool::new(false),
+      goal_retry: false,
     }
   }
   pub fn with_client(mut self, client: ModelClient) -> Self {
     self.client = client;
+    self
+  }
+  /// Puts the model into goal mode: a retryable call failure is waited out at
+  /// GOAL_RETRY_INTERVAL and tried again without end, while a non-retryable failure still
+  /// fails the call at once.
+  pub fn with_goal_retry(mut self, enabled: bool) -> Self {
+    self.goal_retry = enabled;
     self
   }
   fn project(&self, model: &str, messages: &mut [Message], save: bool) -> Result<bool, Error> {
@@ -119,13 +134,14 @@ impl SessionModel {
     let mut request = request.clone();
     apply_agent_instructions(&mut request.conversation);
     // File writes run outside the async runtime workers; validation below performs no I/O.
-    let (mut messages, model, provider, provider_id, directory, rejected) = (
+    let (mut messages, model, provider, provider_id, directory, rejected, goal_retry) = (
       request.conversation,
       request.model.clone(),
       self.provider.clone(),
       self.provider_id.clone(),
       self.directory.clone(),
       self.rejected.load(Ordering::Relaxed),
+      self.goal_retry,
     );
     let (conversation, images) = tokio::task::spawn_blocking(move || {
       let projection = Self {
@@ -134,6 +150,7 @@ impl SessionModel {
         provider_id,
         directory,
         rejected: AtomicBool::new(rejected),
+        goal_retry,
       };
       projection.project(&model, &mut messages, true).map(|images| (messages, images))
     })
@@ -242,16 +259,26 @@ impl ModelCaller for SessionModel {
       .map_err(|error| self.with_model_context(error, &request.model))
   }
   async fn call(&self, original: &Request) -> Result<CallResponse<Self::Stream>, Error> {
-    let (request, images) = self.prepare(original).await?;
-    let result = match self.client.call(&request).await {
-      // Client has not handed out any event; partial stream failures never enter this branch.
-      Err(error) if images && rejects_images(&error) => {
-        self.rejected.store(true, Ordering::Relaxed);
-        let (request, _) = self.prepare(original).await?;
-        self.client.call(&request).await
+    loop {
+      let (request, images) = self.prepare(original).await?;
+      let result = match self.client.call(&request).await {
+        // Client has not handed out any event; partial stream failures never enter this branch.
+        Err(error) if images && rejects_images(&error) => {
+          self.rejected.store(true, Ordering::Relaxed);
+          let (request, _) = self.prepare(original).await?;
+          self.client.call(&request).await
+        }
+        result => result,
+      };
+      let result = result.map_err(|error| self.with_model_context(error, &request.model));
+      match result {
+        // Goal mode: a retryable failure is waited out at a fixed interval and tried again,
+        // without end - the goal says this call must get through. Everything else returns as is.
+        Err(error) if self.goal_retry && error.is_retryable() => {
+          tokio::time::sleep(GOAL_RETRY_INTERVAL).await;
+        }
+        result => return result,
       }
-      result => result,
-    };
-    result.map_err(|error| self.with_model_context(error, &request.model))
+    }
   }
 }

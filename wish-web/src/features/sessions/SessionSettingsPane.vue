@@ -5,10 +5,12 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { SwitchRoot, SwitchThumb } from 'reka-ui';
 import { get } from '../../core/api/client.ts';
 import * as api from '../../core/api/endpoints.ts';
+import type { PermissionMode } from '../../core/api/endpoints.ts';
 import { chat } from '../../core/state/chatSlice.ts';
 import { tr } from '../../core/i18n/tr.ts';
 import Modal from '../../ui/components/Modal.vue';
 import Icon from '../../ui/components/Icon.vue';
+import SelectField from '../../ui/components/SelectField.vue';
 import { useMedia } from '../../ui/composables/useMedia.ts';
 import { showError } from '../../ui/errorDialog.ts';
 import { toast } from '../../ui/toast.ts';
@@ -23,9 +25,15 @@ const hasShell = computed(() => !!snapshot.value?.descriptor?.shell);
 type Shell = { program: string; args: string[] | null };
 const ownShell = ref(false);
 const shell = ref<Shell>({ program: '', args: null });
+const permission = ref<PermissionMode>('operate');
 const source = ref('');
-const draftValue = () => JSON.stringify({ shell: ownShell.value ? shell.value : null });
+const draftValue = () => JSON.stringify({ shell: ownShell.value ? shell.value : null, permission: permission.value });
 const dirty = computed(() => !!source.value && draftValue() !== source.value);
+const permissionOptions = computed(() => [
+  { value: 'operate', label: tr('自动执行', 'Auto-execute') },
+  { value: 'ask', label: tr('每次询问', 'Ask every time') },
+  { value: 'read_only', label: tr('只读', 'Read only') },
+]);
 
 let loadedFor: string | null = null;
 function reset() {
@@ -35,6 +43,7 @@ function reset() {
   const own = current.descriptor?.shell_command;
   ownShell.value = !!own;
   shell.value = own ? { program: own.program ?? '', args: own.args ?? null } : { program: '', args: null };
+  permission.value = current.permission ?? 'operate';
   source.value = draftValue();
 }
 // The page can open before the session's snapshot arrives (a direct link);
@@ -73,6 +82,10 @@ async function save() {
     const wanted = ownShell.value ? shell.value : null;
     if (JSON.stringify(wanted) !== JSON.stringify(saved.shell)) {
       const next = await api.sessionSetShell(id, wanted);
+      if (chat.sessionId.value === id) chat.snapshot.value = next;
+    }
+    if (permission.value !== saved.permission) {
+      const next = await api.sessionSetPermission(id, permission.value);
       if (chat.sessionId.value === id) chat.snapshot.value = next;
     }
     if (chat.sessionId.value === id) { reset(); toast(tr('会话设置已保存。', 'Session settings saved.')); }
@@ -116,6 +129,13 @@ async function act(kind: 'compact' | 'clear') {
       <div class="set-card context-actions">
         <div class="set-row inline"><span class="set-label"><span>{{ tr('立即压缩', 'Compact now') }}</span><small>{{ tr('现在就把较早的内容压缩成摘要', 'Summarize earlier turns right away') }}</small></span><button type="button" class="btn" :disabled="busy || !snapshot?.config?.compaction" @click="act('compact')">{{ tr('压缩', 'Compact') }}</button></div>
         <div class="set-row inline"><span class="set-label"><span>{{ tr('清空上下文', 'Clear the context') }}</span><small>{{ tr('之后从空白上下文继续，历史记录保留', 'Continue from an empty context; history is kept') }}</small></span><button type="button" class="btn danger" :disabled="busy" @click="confirmClear = true">{{ tr('清空', 'Clear') }}</button></div>
+      </div>
+    </section>
+
+    <section class="set-section">
+      <header class="set-section-head"><h3>{{ tr('权限模式', 'Permission mode') }}</h3><p>{{ tr('控制工具的执行方式；会话运行中也可以随时切换。', 'Controls how tools run; it can switch any time, even mid-run.') }}</p></header>
+      <div class="set-card">
+        <label class="set-row inline"><span class="set-label"><span>{{ tr('模式', 'Mode') }}</span><small>{{ tr('自动执行 / 每次询问 / 只读', 'Auto-execute / Ask every time / Read only') }}</small></span><SelectField mobile-page :picker-title="tr('权限模式', 'Permission mode')" :model-value="permission" :options="permissionOptions" :aria-label="tr('权限模式', 'Permission mode')" @update:model-value="permission = $event as PermissionMode" /></label>
       </div>
     </section>
 

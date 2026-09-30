@@ -375,7 +375,8 @@ impl<T: Transport> Client<T> {
   }
 
   /// Reads one page of the model list this upstream serves, over the protocol named when the
-  /// client was built.
+  /// client was built. A retryable failure is waited out and the page read again, as this
+  /// client's retry policy allows - the list is a read, so a replay is always safe.
   ///
   /// # Errors
   ///
@@ -390,8 +391,12 @@ impl<T: Transport> Client<T> {
         "was not named when this client was built",
       )
     })?;
-    model_list::fetch(&self.transport, protocol, query, &self.credentials, self.get_current_time())
-      .await
+    retry(
+      &self.retry,
+      |_| model_list::fetch(&self.transport, protocol, query, &self.credentials, self.get_current_time()),
+      classify_retry,
+    )
+    .await
   }
 
   /// Reads the account state this upstream reports, over the protocol named when the client was

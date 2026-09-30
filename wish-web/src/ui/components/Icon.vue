@@ -9,6 +9,7 @@ import {
   Sun, Moon, Terminal, Trash2, Wrench, X, Bell, Keyboard, Accessibility,
   Smartphone, AppWindow, Info, PanelLeft, PanelRight, Paperclip, Languages, TriangleAlert, LogOut,
   GitBranch, Undo2, Target, FlagOff, Pin, PinOff, Archive, ArchiveRestore,
+  CircleQuestionMark, Eye, Zap,
 } from '@lucide/vue';
 import { computed, type FunctionalComponent } from 'vue';
 
@@ -28,6 +29,7 @@ const ICONS: Record<string, FunctionalComponent> = {
   'triangle-alert': TriangleAlert, 'file-diff': FileDiff, save: Save, 'external-link': ExternalLink,
   'log-out': LogOut, 'git-branch': GitBranch, 'undo-2': Undo2, target: Target, 'flag-off': FlagOff,
   pin: Pin, 'pin-off': PinOff, archive: Archive, 'archive-restore': ArchiveRestore,
+  'circle-question-mark': CircleQuestionMark, eye: Eye, zap: Zap,
 };
 
 const props = defineProps<{ name: string }>();

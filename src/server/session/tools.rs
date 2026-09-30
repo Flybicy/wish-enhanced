@@ -5,7 +5,7 @@ use crate::{
     tool::{ToolCall, ToolExecutor, ToolOutcome},
   },
   protocol::{ContentBlock, Message},
-  session::{Session, SessionHandle},
+  session::{PermissionMode, Session, SessionHandle},
   tool::{search_history::SearchHistoryTool, shell::ShellTool, view_image::ViewImageTool},
 };
 use serde_json::{json, Value};
@@ -154,6 +154,30 @@ impl SessionTools {
 }
 impl ToolExecutor for SessionTools {
   async fn execute(&self, call: &ToolCall, control: &ExecutionControl) -> ToolOutcome {
+    if has_side_effects(&call.name) {
+      let Some(app) = self.app.upgrade() else {
+        return ToolOutcome::Failed("application is shutting down".into());
+      };
+      let Ok(slot) = app.get_session(&self.session_id).await else {
+        return ToolOutcome::Failed("session is unavailable".into());
+      };
+      match slot.permission() {
+        PermissionMode::Operate => {}
+        PermissionMode::ReadOnly => return denied_read_only(&call.name),
+        PermissionMode::Ask => match self.request_approval(&app, &slot, call, control).await {
+          Approval::Granted => {}
+          Approval::Denied => return ToolOutcome::Failed("denied by user".into()),
+          Approval::Cancelled => return ToolOutcome::Cancelled,
+          Approval::Error(message) => return ToolOutcome::Failed(message),
+        },
+      }
+    }
+    self.dispatch(call, control).await
+  }
+}
+
+impl SessionTools {
+  async fn dispatch(&self, call: &ToolCall, control: &ExecutionControl) -> ToolOutcome {
     match call.name.as_str() {
       "view_image" => {
         let outcome = ViewImageTool.execute(call, control).await;
@@ -238,6 +262,138 @@ impl ToolExecutor for SessionTools {
       }
       _ => ToolOutcome::Failed(format!("unknown tool: {}", call.name)),
     }
+  }
+}
+
+/// The outcome of an ask-mode approval request.
+enum Approval {
+  Granted,
+  Denied,
+  Cancelled,
+  Error(String),
+}
+impl From<bool> for Approval {
+  fn from(granted: bool) -> Self {
+    if granted { Self::Granted } else { Self::Denied }
+  }
+}
+
+impl SessionTools {
+  /// Ask mode: publish the call as awaiting approval on the session's event
+  /// stream and wait for the user's decision. The registry entry is removed on
+  /// every exit path, so nothing leaks.
+  async fn request_approval(
+    &self,
+    app: &Arc<App>,
+    slot: &Arc<super::SessionSlot>,
+    call: &ToolCall,
+    control: &ExecutionControl,
+  ) -> Approval {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let key = (self.session_id.clone(), call.call_id.clone());
+    {
+      let mut approvals = app.approvals.lock().unwrap();
+      if approvals.contains_key(&key) {
+        return Approval::Error("duplicate approval request".into());
+      }
+      approvals.insert(key.clone(), sender);
+    }
+    let _ = slot.events.send(json!({
+      "type": "approval_required",
+      "call_id": call.call_id,
+      "name": call.name,
+      "summary": preview(&call.arguments),
+    }));
+    let approval = tokio::select! {
+      decision = receiver => Approval::from(decision.unwrap_or(false)),
+      _ = control.wait_for_cancellation() => Approval::Cancelled,
+    };
+    app.approvals.lock().unwrap().remove(&key);
+    approval
+  }
+}
+
+/// Tools that reach the world outside this process. Read-only tools never gate.
+pub(crate) fn has_side_effects(name: &str) -> bool {
+  matches!(
+    name,
+    "shell_start"
+      | "shell_edit"
+      | "shell_write"
+      | "shell_kill"
+      | "snapshot_undo"
+      | "snapshot_redo"
+      | "subagent"
+  ) || name.starts_with("mcp_")
+}
+
+fn denied_read_only(name: &str) -> ToolOutcome {
+  ToolOutcome::Failed(format!("denied: session is read-only ({name} is a side-effect tool)"))
+}
+
+/// A compact JSON preview of a call's arguments for the approval card.
+fn preview(arguments: &Value) -> String {
+  let text = arguments.to_string();
+  if text.chars().count() <= 200 {
+    return text;
+  }
+  let mut summary: String = text.chars().take(200).collect();
+  summary.push('…');
+  summary
+}
+
+#[cfg(test)]
+mod tests {
+  use super::{denied_read_only, has_side_effects, preview};
+  use crate::executor::tool::ToolOutcome;
+  use serde_json::json;
+
+  #[test]
+  fn side_effect_tools_are_classified() {
+    for name in [
+      "shell_start",
+      "shell_edit",
+      "shell_write",
+      "shell_kill",
+      "snapshot_undo",
+      "snapshot_redo",
+      "subagent",
+      "mcp_server_tool",
+    ] {
+      assert!(has_side_effects(name), "{name} must be a side effect");
+    }
+    for name in [
+      "shell_poll",
+      "snapshot_checkpoint",
+      "view_image",
+      "history_search",
+      "web_search",
+      "fetch_content",
+      "skill_search",
+      "memory_recall",
+      "subagent_result",
+    ] {
+      assert!(!has_side_effects(name), "{name} must be read-only");
+    }
+  }
+
+  #[test]
+  fn read_only_denial_names_the_tool() {
+    match denied_read_only("shell_start") {
+      ToolOutcome::Failed(message) => assert_eq!(
+        message,
+        "denied: session is read-only (shell_start is a side-effect tool)"
+      ),
+      _ => panic!("expected a failure outcome"),
+    }
+  }
+
+  #[test]
+  fn previews_truncate_long_arguments() {
+    assert_eq!(preview(&json!({"command": "ls"})), r#"{"command":"ls"}"#);
+    let truncated = preview(&json!({"text": "x".repeat(300)}));
+    assert_eq!(truncated.chars().count(), 201);
+    assert!(truncated.ends_with('…'));
   }
 }
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
 import { PopoverRoot, PopoverTrigger, PopoverPortal, PopoverContent, PopoverArrow } from 'reka-ui';
-import { directoriesList } from '../../core/api/endpoints.ts';
+import { directoriesCreate, directoriesList } from '../../core/api/endpoints.ts';
 import { errorText } from '../../core/config-editor.ts';
 import { usePageActivity } from '../../ui/composables/usePageActivity.ts';
 import Icon from '../../ui/components/Icon.vue';
@@ -19,14 +19,23 @@ const sidebarListing = ref<DirectoryListing>();
 const sidebarPending = ref(false), sidebarError = ref('');
 const sidebar = ref<HTMLElement>();
 const showHidden = ref(false);
+const creating = ref(false), createPending = ref(false), createError = ref(''), newName = ref('');
+const newNameInput = ref<HTMLInputElement>();
 const directories = computed(() => (listing.value?.directories ?? []).filter(name => showHidden.value || !name.startsWith('.')));
+// Rows for the browser pane: drive entries browse as-is, folders join paths.
+const rows = computed(() => {
+  const current = listing.value;
+  if (!current) return [];
+  if (current.root) return directories.value.map(drive => ({ name: drive, path: drive }));
+  return directories.value.map(name => ({ name, path: (current.path === '/' ? '' : current.path) + '/' + name }));
+});
 const siblings = computed(() => {
   const current = listing.value;
   if (!current) return [];
-  if (!current.parent) return [{ name: '/', path: '/' }];
+  if (current.parent == null) return current.root ? [] : [{ name: '/', path: '/' }];
   if (sidebarListing.value?.path !== current.parent) return [];
   return sidebarListing.value.directories
-    .map(name => ({ name, path: (current.parent === '/' ? '' : current.parent) + '/' + name }))
+    .map(name => ({ name, path: current.parent === '' ? name : (current.parent === '/' ? '' : current.parent) + '/' + name }))
     .filter(item => showHidden.value || !item.name.startsWith('.') || item.path === current.path);
 });
 let generation = 0;
@@ -61,7 +70,8 @@ async function browse(target: string) {
     if (current !== generation) return;
     listing.value = result;
     path.value = result.path;
-    if (result.parent && sidebarListing.value?.path !== result.parent) {
+    if (result.root) { creating.value = false; createError.value = ''; }
+    if (result.parent != null && sidebarListing.value?.path !== result.parent) {
       sidebarListing.value = undefined;
       void loadSidebar(result.parent, current);
     } else {
@@ -74,14 +84,40 @@ async function browse(target: string) {
   } finally { if (current === generation) pending.value = false; }
 }
 watch(open, value => {
-  if (value) { listing.value = undefined; sidebarListing.value = undefined; void browse(props.modelValue || '/'); }
-  else { ++generation; pending.value = false; sidebarPending.value = false; }
+  if (value) { listing.value = undefined; sidebarListing.value = undefined; void browse(props.modelValue || ''); }
+  else { ++generation; pending.value = false; sidebarPending.value = false; creating.value = false; createError.value = ''; }
 });
 watch(active, value => { if (!value) open.value = false; });
 function select() {
-  if (!listing.value || pending.value || error.value || path.value !== listing.value.path) return;
+  if (!listing.value || listing.value.root || pending.value || error.value || path.value !== listing.value.path) return;
   emit('update:modelValue', listing.value.path);
   open.value = false;
+}
+function startCreate() {
+  if (!listing.value || listing.value.root) return;
+  newName.value = '';
+  createError.value = '';
+  creating.value = true;
+  void nextTick(() => newNameInput.value?.focus());
+}
+function cancelCreate() {
+  creating.value = false;
+  createError.value = '';
+}
+async function createFolder() {
+  const target = listing.value;
+  if (!target || target.root || createPending.value || !newName.value.trim()) return;
+  createPending.value = true;
+  createError.value = '';
+  try {
+    const result = await directoriesCreate(target.path, newName.value);
+    creating.value = false;
+    await browse(result.path);
+  } catch (reason) {
+    createError.value = errorText(reason);
+  } finally {
+    createPending.value = false;
+  }
 }
 </script>
 
@@ -96,7 +132,7 @@ function select() {
       <PopoverContent class="directory-picker" :aria-label="tr('选择工作目录', 'Choose working directory')" side="top" align="start" :side-offset="10" :collision-padding="16" @open-auto-focus.prevent>
         <BubbleSurface />
         <form class="directory-path" @submit.prevent="browse(path)">
-          <button type="button" class="btn ghost icon-only" :disabled="!listing?.parent || pending" :aria-label="tr('上一级', 'Parent directory')" @click="browse(listing!.parent!)"><Icon name="arrow-left" /></button>
+          <button type="button" class="btn ghost icon-only" :disabled="listing?.parent == null || pending" :aria-label="tr('上一级', 'Parent directory')" @click="browse(listing!.parent!)"><Icon name="arrow-left" /></button>
           <button type="button" class="btn ghost icon-only" :disabled="pending" :aria-label="tr('主目录', 'Home directory')" :data-hint="tr('主目录', 'Home directory')" @click="browse('~')"><Icon name="house" /></button>
           <input v-model="path" class="input" :aria-label="tr('目录路径', 'Directory path')" spellcheck="false" autocomplete="off" />
           <button class="btn ghost icon-only" :aria-label="tr('打开路径', 'Open path')"><Icon name="chevron-right" /></button>
@@ -112,15 +148,22 @@ function select() {
           <p v-if="pending" class="hint" role="status">{{ tr('正在读取…', 'Loading…') }}</p>
           <p v-else-if="error" class="load-error" role="alert">{{ error }}</p>
           <template v-else>
-            <button v-for="name in directories" :key="name" class="directory-row" @click="browse((listing!.path === '/' ? '' : listing!.path) + '/' + name)"><Icon name="folder" class="directory-folder" /><span>{{ name }}</span><Icon name="chevron-right" class="directory-enter" /></button>
-            <p v-if="!directories.length" class="hint">{{ tr('没有可显示的子目录', 'No visible subdirectories') }}</p>
+            <button v-for="row in rows" :key="row.path" class="directory-row" @click="browse(row.path)"><Icon name="folder" class="directory-folder" /><span>{{ row.name }}</span><Icon name="chevron-right" class="directory-enter" /></button>
+            <p v-if="!rows.length" class="hint">{{ tr('没有可显示的子目录', 'No visible subdirectories') }}</p>
           </template>
         </div>
         </div>
         </div>
         <div class="directory-footer">
-          <label class="directory-hidden"><input v-model="showHidden" type="checkbox" />{{ tr('显示隐藏目录', 'Show hidden directories') }}</label>
-          <button class="btn primary icon-only" :aria-label="tr('使用此目录', 'Use this directory')" :data-hint="tr('使用此目录', 'Use this directory')" :disabled="pending || !!error || !listing || path !== listing.path" @click="select"><Icon name="check" /></button>
+          <form v-if="creating" class="directory-create" @submit.prevent="createFolder">
+            <input ref="newNameInput" v-model="newName" class="input" :placeholder="tr('文件夹名称', 'Folder name')" :aria-label="tr('文件夹名称', 'Folder name')" spellcheck="false" autocomplete="off" :disabled="createPending" />
+            <button type="submit" class="btn ghost icon-only" :disabled="createPending || !newName.trim()" :aria-label="tr('创建文件夹', 'Create folder')"><Icon name="check" /></button>
+            <button type="button" class="btn ghost icon-only" :disabled="createPending" :aria-label="tr('取消', 'Cancel')" @click="cancelCreate"><Icon name="x" /></button>
+            <p v-if="createError" class="load-error" role="alert">{{ createError }}</p>
+          </form>
+          <label v-else class="directory-hidden"><input v-model="showHidden" type="checkbox" />{{ tr('显示隐藏目录', 'Show hidden directories') }}</label>
+          <button v-if="!creating" type="button" class="btn ghost new-folder" :disabled="pending || !!error || !listing || listing.root" @click="startCreate"><Icon name="plus" /><span>{{ tr('新建文件夹', 'New folder') }}</span></button>
+          <button class="btn primary icon-only" :aria-label="tr('使用此目录', 'Use this directory')" :data-hint="tr('使用此目录', 'Use this directory')" :disabled="pending || !!error || !listing || listing.root || path !== listing.path" @click="select"><Icon name="check" /></button>
         </div>
         <PopoverArrow as-child :width="30" :height="9"><span data-bubble-anchor class="directory-tail-anchor" aria-hidden="true" /></PopoverArrow>
       </PopoverContent>
@@ -153,6 +196,11 @@ function select() {
 .directory-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; flex:none; padding:5px 10px 6px 13px; background:var(--directory-chrome); border-radius:0 0 13px 13px; }
 .directory-footer .btn { width:28px; min-width:28px; height:28px; min-height:28px; padding:0; }
 .directory-footer .icon { width:17px; height:17px; }
+.directory-footer .btn.new-folder { width:auto; min-width:0; gap:5px; padding:0 9px; font-size:12px; }
+.directory-footer .btn.new-folder .icon { width:14px; height:14px; }
+.directory-create { flex:1; display:flex; flex-wrap:wrap; align-items:center; gap:4px; min-width:0; }
+.directory-create .input { flex:1; width:auto; min-width:0; height:28px; padding:0 8px; font:12px/1.5 var(--mono); }
+.directory-create .load-error { flex-basis:100%; margin:0; padding:0; font-size:11px; }
 .directory-hidden { display:flex; align-items:center; gap:7px; min-height:28px; color:var(--fg-subtle); font-size:11px; cursor:pointer; }
 .directory-hidden input { margin:0; width:12px; height:12px; accent-color:var(--accent); }
 @media (min-width:900px) {

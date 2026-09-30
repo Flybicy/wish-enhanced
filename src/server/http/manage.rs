@@ -298,10 +298,12 @@ fn prefix_through(
 /// Rewind the live thread to an earlier turn: everything after the chosen entry
 /// is dropped. The old generation is sealed (kept for audit), not deleted, and a
 /// fresh active generation is built from the prefix up to and including entry_id.
+/// With no entry_id the prefix is empty: the whole thread leaves the live context,
+/// which is what resending or editing the thread's first message rewinds to.
 #[derive(Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct PointRequest {
-  /// The EntryId to keep as the last entry of the thread.
+  /// The EntryId to keep as the last entry of the thread; none keeps nothing.
   pub entry_id: Option<usize>,
 }
 pub async fn rewind(
@@ -309,8 +311,6 @@ pub async fn rewind(
   Path(id): Path<String>,
   Json(body): Json<PointRequest>,
 ) -> Result<Json<Value>, ApiError> {
-  let target =
-    EntryId(body.entry_id.ok_or_else(|| ApiError::bad_request("entry_id is required"))?);
   let slot = app.get_session(&id).await?;
   let mut session =
     slot.session.clone().try_lock_owned().map_err(|_| ApiError::conflict("session is running"))?;
@@ -318,7 +318,10 @@ pub async fn rewind(
     slot.require_live()?;
     let generation = session.get_active_generation()?;
     let entries = session.get_generation_entries(generation.id)?;
-    let prefix = prefix_through(&entries, target)?;
+    let prefix = match body.entry_id {
+      Some(entry_id) => prefix_through(&entries, EntryId(entry_id))?,
+      None => Vec::new(),
+    };
     session.prepare_standby_generation(prefix)?;
     session.activate_standby_generation()?;
     slot.update_snapshot(&session);

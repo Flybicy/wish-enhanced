@@ -11,6 +11,8 @@ export interface SessionConfig {
   reasoning: { enabled?: boolean | null; effort?: string | null; summary?: string | null } | null;
   cache: any;
   run: { tools: 'Serial' | 'Parallel' };
+  /** Absent while operate (the serialized default); carried through config saves. */
+  permission?: 'operate' | 'ask' | 'read_only';
   compaction?: any;
 }
 export interface SessionDescriptor {
@@ -47,6 +49,8 @@ export interface SessionView {
   created_at_ms: number; updated_at_ms: number;
   resume_requires_user: boolean; compaction_count: number;
   standby_preparing: boolean;
+  /** Current permission mode; absent statuses (old records) mean operate. */
+  permission: 'operate' | 'ask' | 'read_only';
   context_tokens: number | null;
   stats: SessionStats | null;
   last_error: DisplayFailure | null;
@@ -62,6 +66,8 @@ export interface EntryPayload {
   command?: string;
   result?: any;
   metadata?: any;
+  /** User messages only: the original send, so the turn can be resent or edited. */
+  resend?: { text: string; attachments: { type: string; blob_id: string; filename?: string | null; byte_count?: number | null; placeholder?: string }[] };
 }
 export interface EntryView {
   seq: number; id: number | string; run_id?: number | null;
@@ -92,6 +98,7 @@ export function sessionView(value: any): SessionView {
     created_at_ms: session.created_at, updated_at_ms: session.updated_at,
     resume_requires_user: status.phase === 'Suspended', compaction_count: status.active_generation ?? 0,
     standby_preparing: Boolean(status.standby_preparing),
+    permission: status.permission ?? (config.permission ?? 'operate'),
     // Input size of the last conversation call in the active context; null until one completes.
     context_tokens: status.context_tokens ?? null,
     stats: status.stats ?? null,
@@ -122,7 +129,19 @@ export function entryView(item: any, sessionId: string): EntryView {
         result.payload = {tool_name:'shell',background:true,command:completion?.command,
           result:completion?.result ? {status:'success',output:completion.result} : undefined,
           content:[{type:'text',text:raw}]};
-      } else { result.kind = type === 'Developer' ? 'developer_message' : 'user_message'; result.payload.content = blocks(message.content); }
+      } else {
+        result.kind = type === 'Developer' ? 'developer_message' : 'user_message';
+        result.payload.content = blocks(message.content);
+        if (type === 'User') {
+          result.payload.resend = {
+            text: typeof message.metadata?.input_text === 'string' ? message.metadata.input_text
+              : result.payload.content.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n'),
+            attachments: (message.metadata?.attachments ?? []).map((a: any) => ({
+              type: a.kind, blob_id: a.id, filename: a.name, byte_count: a.byte_count, placeholder: a.placeholder,
+            })),
+          };
+        }
+      }
       break;
     }
     case 'Assistant': result.kind = 'assistant_message'; result.payload.content = blocks(message.content); break;

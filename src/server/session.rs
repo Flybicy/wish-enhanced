@@ -6,8 +6,8 @@ use crate::{
   executor::{self, ExecutionControl},
   protocol::StreamEvent,
   session::{
-    Entry, EntryId, EntryOrigin, Generation, HistoryReader, RunOutcome, Session, SessionConfig,
-    SessionEvent, SessionHandle,
+    Entry, EntryId, EntryOrigin, Generation, HistoryReader, PermissionMode, RunOutcome, Session,
+    SessionConfig, SessionEvent, SessionHandle,
     statistics::{ModelCallPurpose, ModelCallRecord, ModelCallStatus},
   },
   storage::ReadList,
@@ -24,6 +24,12 @@ use std::{
 };
 use tokio::sync::{Mutex as AsyncMutex, broadcast};
 use tools::SessionTools;
+
+/// Whether the session's goal is in force: present and not blank, as the request builder reads
+/// it (a whitespace-only goal is no goal).
+fn has_goal(config: &SessionConfig) -> bool {
+  config.goal.as_deref().is_some_and(|goal| !goal.trim().is_empty())
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -77,6 +83,10 @@ pub struct SessionSlot {
   pub tools: SessionTools,
   /// The command this session's shell tool starts; None without a shell tool.
   pub shell_command: Option<Arc<RwLock<ShellCommand>>>,
+  /// The live permission mode; it gates side-effect tools even mid-run.
+  pub permission: Mutex<PermissionMode>,
+  /// A mode change requested while a run owned the session; persisted at run end.
+  pending_permission: Mutex<Option<PermissionMode>>,
   pub image_dir: PathBuf,
   tasks: tokio_util::task::TaskTracker,
   app: std::sync::Weak<crate::server::app::App>,
@@ -177,7 +187,9 @@ impl SessionSlot {
     let entries = session.get_entries();
     let calls = session.get_model_calls();
     let mut stats_memo = StatsMemo::default();
-    let status = Mutex::new(snapshot(&session, stats_value(&entries, &calls, &mut stats_memo)));
+    let permission = Mutex::new(session.get_config().permission);
+    let status =
+      Mutex::new(snapshot(&session, session.get_config().permission, stats_value(&entries, &calls, &mut stats_memo)));
     let (events, _) = broadcast::channel(256);
     Ok(Arc::new(Self {
       descriptor: RwLock::new(descriptor),
@@ -196,6 +208,8 @@ impl SessionSlot {
       selection_edit: Arc::new(AsyncMutex::new(())),
       tools,
       shell_command,
+      permission,
+      pending_permission: Mutex::new(None),
       image_dir,
       tasks,
       app,
@@ -327,12 +341,36 @@ impl SessionSlot {
   }
   pub fn update_snapshot(&self, session: &Session) {
     *self.queue.lock().unwrap() = session.get_message_queue();
+    // A full config write (PUT /config) may carry a different mode: stay aligned.
+    *self.permission.lock().unwrap() = session.get_config().permission;
     *self.status.lock().unwrap() = self.refresh_status(session);
+  }
+  /// The mode tool execution gates by; it may change while a run is active.
+  pub fn permission(&self) -> PermissionMode {
+    *self.permission.lock().unwrap()
+  }
+  /// Switches the permission mode. It applies immediately, even while a run
+  /// holds the session; a mid-run change persists once the run releases it.
+  pub fn set_permission(&self, mode: PermissionMode) -> Result<(), ApiError> {
+    self.require_live()?;
+    *self.permission.lock().unwrap() = mode;
+    match self.session.clone().try_lock_owned() {
+      Ok(mut session) => {
+        session.set_permission(mode)?;
+        self.update_snapshot(&session);
+        self.persist_index()?;
+      }
+      Err(_) => {
+        self.status.lock().unwrap()["permission"] = json!(mode);
+        *self.pending_permission.lock().unwrap() = Some(mode);
+      }
+    }
+    Ok(())
   }
   /// Rebuilds the status with fresh stats folds; the memo keeps each read cheap.
   fn refresh_status(&self, session: &Session) -> Value {
     let mut memo = self.stats.lock().unwrap();
-    snapshot(session, stats_value(&self.entries, &self.calls, &mut memo))
+    snapshot(session, self.permission(), stats_value(&self.entries, &self.calls, &mut memo))
   }
   pub fn interrupt(&self) -> bool {
     self.auto_run_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -384,7 +422,9 @@ impl SessionSlot {
     control: ExecutionControl,
     compact: bool,
   ) {
-    let model = selection::SwitchingModel::new(self.make_model(provider, provider_id));
+    let model = selection::SwitchingModel::new(
+      self.make_model(provider, provider_id).with_goal_retry(has_goal(session.get_config())),
+    );
     let result = if compact {
       let prepared = match session.get_history().len() {
         Ok(mut cursor) => self.apply_selection(
@@ -411,6 +451,12 @@ impl SessionSlot {
       .await
     };
     *self.control.lock().unwrap() = None;
+    // A permission switch requested mid-run persists now that the session is free.
+    if let Some(mode) = self.pending_permission.lock().unwrap().take() {
+      if let Err(error) = session.set_permission(mode) {
+        eprintln!("session permission: {error}");
+      }
+    }
     // Observational memory: capture one bounded observation per finished run, when enabled.
     if let Some(app) = self.tools.app_handle() {
       if let Some(memory) = &app.memory {
@@ -484,9 +530,9 @@ fn web_outcome(outcome: &RunOutcome) -> Value {
     _ => json!(outcome),
   }
 }
-fn snapshot(session: &Session, stats: Value) -> Value {
+fn snapshot(session: &Session, permission: PermissionMode, stats: Value) -> Value {
   json!({"phase":session.get_state().get_phase(),"state":session.get_state(),
-    "active_generation":session.get_active_generation().ok().map(|g|g.id),"metadata":session.get_metadata(),"config":session.get_config(),"queue_head":session.get_queue_head(),"running":false,"standby_preparing":false,
+    "active_generation":session.get_active_generation().ok().map(|g|g.id),"metadata":session.get_metadata(),"config":session.get_config(),"permission":permission,"queue_head":session.get_queue_head(),"running":false,"standby_preparing":false,
     "context_tokens":context_tokens(session),"stats":stats})
 }
 /// Running totals behind the stats line under the composer. Settled entries
