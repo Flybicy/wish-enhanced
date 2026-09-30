@@ -15,8 +15,10 @@ html.desktop-shell .window-titlebar .wt-logo { width: 16px; height: 16px; displa
 html.desktop-shell .window-titlebar .wt-title { font-size: 12px; font-weight: 600; letter-spacing: .04em; color: var(--fg-muted); white-space: nowrap; }
 html.desktop-shell .window-titlebar .wt-spacer { flex: 1 1 auto; }
 html.desktop-shell .window-titlebar .wt-controls { display: flex; align-items: stretch; align-self: stretch; }
-html.desktop-shell .window-titlebar .wt-btn { width: 46px; display: flex; align-items: center; justify-content: center; color: var(--fg-subtle); }
+html.desktop-shell .window-titlebar .wt-btn { width: 46px; align-self: stretch; display: flex; align-items: center; justify-content: center; color: var(--fg-subtle); border: 0; background: none; padding: 0; cursor: pointer; transition: background var(--dur-fast), color var(--dur-fast); }
+html.desktop-shell .window-titlebar .wt-btn:hover { background: var(--bg-hover); color: var(--fg); }
 html.desktop-shell .window-titlebar .wt-btn.wt-close { color: var(--fg-muted); }
+html.desktop-shell .window-titlebar .wt-btn.wt-close:hover { background: #c0392b; color: #fff; }
 /* The strip is fixed, so the shell (and transient gate screens) must shrink to
    fill the remaining column height instead of asking for the whole viewport. */
 html.desktop-shell .shell { height: auto; flex: 1 1 auto; min-height: 0; }

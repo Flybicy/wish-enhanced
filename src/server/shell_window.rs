@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use windows_sys::core::{GUID, PCWSTR};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows_sys::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+use windows_sys::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_APARTMENTTHREADED};
 use windows_sys::Win32::System::LibraryLoader::{
   GetProcAddress, GetModuleHandleW, LoadLibraryW,
 };
@@ -22,7 +22,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
   CreateWindowExW, CS_HREDRAW, CS_VREDRAW, DefWindowProcW, DispatchMessageW,
   GetClientRect, GetMessageW, GetSystemMetrics, GetWindowPlacement, GetWindowRect, IsZoomed,
   IDC_ARROW, LoadCursorW, MSG, NCCALCSIZE_PARAMS, PostMessageW, PostQuitMessage, RegisterClassW,
-  SetWindowPlacement, ShowWindow, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
+  SendMessageW, SetWindowPlacement, ShowWindow, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
   SM_CXFRAME, SM_CXPADDEDBORDER, SM_CXSCREEN, SM_CYFRAME, SM_CYSCREEN, TranslateMessage,
   WINDOWPLACEMENT, WM_CLOSE, WM_DESTROY, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_SIZE,
   WNDCLASSW, WS_OVERLAPPEDWINDOW,
@@ -31,6 +31,13 @@ use windows_sys::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
 use windows_sys::Win32::UI::Controls::MARGINS;
 
 const S_OK: i32 = 0;
+
+// windows-sys 0.61 does not ship ReleaseCapture, so the one user32 entry the
+// caption move handoff needs is declared by hand; it is a stable Win32 export.
+#[link(name = "user32")]
+unsafe extern "system" {
+  fn ReleaseCapture() -> i32;
+}
 
 /// Stage-stamped diagnostics: every step of the window host lands in one file
 /// under the temporary directory, so a failed run still tells its story.
@@ -551,6 +558,17 @@ unsafe extern "system" fn handler_invoke(this: *mut c_void, error: i32, result: 
       let add_ref: unsafe extern "system" fn(*mut c_void) -> u32 =
         std::mem::transmute(vtfn(webview, 1));
       add_ref(webview);
+      // Wire the caption message handler: the front end posts "wish:<intent>"
+      // (WindowTitlebar.vue) and message_invoke drives the window. Slot 34 is
+      // ICoreWebView2::add_WebMessageReceived; EventRegistrationToken is
+      // layout-identical to i64, so a plain i64 out-pointer is safe. The Box
+      // leak keeps the handler alive for the process lifetime on purpose.
+      let handler = Box::into_raw(Box::new(MessageHandler { vtable: &MESSAGE_HANDLER_VTABLE }));
+      let add_message_received: unsafe extern "system" fn(*mut c_void, *mut c_void, *mut i64) -> i32 =
+        std::mem::transmute(vtfn(webview, 34));
+      let mut token: i64 = 0;
+      let code = add_message_received(webview, handler as *mut c_void, &mut token);
+      log(&format!("window: add_message_received -> {code:#010x} token={token}"));
       let url: Vec<u16> = URL
         .get()
         .map(|url| url.encode_utf16().chain(std::iter::once(0)).collect())
@@ -561,6 +579,86 @@ unsafe extern "system" fn handler_invoke(this: *mut c_void, error: i32, result: 
       log(&format!("window: navigate -> {code:#010x}"));
       READY.store(true, Ordering::SeqCst);
     }
+  }
+  S_OK
+}
+
+/// The caption talks to the host over the WebView2 web-message channel because
+/// the web view fills the client area and swallows the mouse before the native
+/// frame's hit-testing can see it. This handler receives those messages and
+/// drives the window: drag, minimize, maximize/restore and close.
+#[repr(C)]
+struct MessageHandler {
+  vtable: *const MessageHandlerVtable,
+}
+#[repr(C)]
+struct MessageHandlerVtable {
+  query_interface: unsafe extern "system" fn(*mut c_void, *const GUID, *mut *mut c_void) -> i32,
+  add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
+  release: unsafe extern "system" fn(*mut c_void) -> u32,
+  invoke: unsafe extern "system" fn(*mut c_void, *mut c_void, *mut c_void) -> i32,
+}
+static MESSAGE_HANDLER_VTABLE: MessageHandlerVtable = MessageHandlerVtable {
+  query_interface: message_query_interface,
+  add_ref: handler_add_ref,
+  release: handler_release,
+  invoke: message_invoke,
+};
+const IID_WEB_MESSAGE_HANDLER: GUID =
+  GUID { data1: 0x57213f19, data2: 0x00e6, data3: 0x49fa, data4: [0x8e, 0x07, 0x89, 0x8e, 0xa0, 0x1e, 0xcb, 0xd0] };
+
+unsafe extern "system" fn message_query_interface(this: *mut c_void, iid: *const GUID, out: *mut *mut c_void) -> i32 {
+  if out.is_null() {
+    return -2147467261; // E_POINTER
+  }
+  if guid_eq(&*iid, &IID_IUNKNOWN) || guid_eq(&*iid, &IID_WEB_MESSAGE_HANDLER) {
+    *out = this;
+    return S_OK;
+  }
+  -2147467260 // E_NOINTERFACE
+}
+
+/// Parse one caption intent and act on the window. Intents are strings of the
+/// shape "wish:drag" / "wish:minimize" / "wish:maximize" / "wish:close".
+unsafe extern "system" fn message_invoke(_this: *mut c_void, _sender: *mut c_void, args: *mut c_void) -> i32 {
+  if args.is_null() {
+    return S_OK;
+  }
+  // ICoreWebView2WebMessageReceivedEventArgs::TryGetWebMessageAsString is slot 5.
+  let try_get_string: unsafe extern "system" fn(*mut c_void, *mut *mut u16) -> i32 =
+    std::mem::transmute(vtfn(args, 5));
+  let mut raw: *mut u16 = std::ptr::null_mut();
+  if try_get_string(args, &mut raw) != S_OK || raw.is_null() {
+    return S_OK;
+  }
+  let mut len = 0usize;
+  while *raw.add(len) != 0 {
+    len += 1;
+  }
+  let message = String::from_utf16_lossy(std::slice::from_raw_parts(raw, len));
+  CoTaskMemFree(raw as *mut c_void);
+  let intent = message.strip_prefix("wish:").unwrap_or(&message);
+  let window = WINDOW.load(Ordering::SeqCst);
+  if window.is_null() {
+    return S_OK;
+  }
+  match intent {
+    "minimize" => {
+      ShowWindow(window, SW_MINIMIZE);
+    }
+    "maximize" => {
+      ShowWindow(window, if IsZoomed(window) != 0 { SW_RESTORE } else { SW_MAXIMIZE });
+    }
+    "close" => {
+      PostMessageW(window, WM_CLOSE, 0, 0);
+    }
+    "drag" => {
+      // The classic caption-move handoff: drop the web view's capture, then let
+      // the window enter its own move loop from the current cursor position.
+      ReleaseCapture();
+      SendMessageW(window, WM_NCLBUTTONDOWN, HT_CAPTION as usize, 0);
+    }
+    _ => {}
   }
   S_OK
 }
