@@ -2,7 +2,7 @@
 ; Built by CI into dist/. Inputs: dist/wish/wish.exe, dist/wish/web/**, dist/wish/niubash/**
 
 #define MyAppName "Wish"
-#define MyAppVersion "0.3.3"
+#define MyAppVersion "0.3.4"
 #define MyAppPublisher "wish-enhanced"
 #define MyAppExeName "wish.exe"
 
@@ -21,10 +21,12 @@ SolidCompression=yes
 WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
+; A running wish.exe holds files the setup replaces.
+CloseApplications=yes
+CloseApplicationsFilter=wish.exe
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
-Name: "pathenv"; Description: "Add Wish to PATH (wish.exe and niubash commands)"; Flags: checkedonce
 
 [Files]
 Source: "..\dist\wish\wish.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -50,13 +52,35 @@ Name: "{userdocs}\Wish"; Permissions: users-modify
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\wish.ico"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\wish.ico"; Tasks: desktopicon
 
-[Registry]
-Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app};{app}\niubash;{app}\python;{app}\node;{app}\git\cmd"; Tasks: pathenv; Check: NeedsPath
+; Self-contained by design: the app prepends its bundled python/node/git/niubash
+; folders to the PATH of the child processes it spawns, so the installer never
+; writes user or system environment variables.
 
 [Code]
-function NeedsPath(): Boolean;
+var
+  KeepData: Boolean;
+
+function InitializeUninstall(): Boolean;
 begin
-  Result := Pos(Lowercase(ExpandConstant('{app}')), Lowercase(GetEnv('Path'))) = 0;
+  Result := True;
+  // Silent uninstalls keep everything; interactive ones choose. The data
+  // folder holds sessions, skills and settings; workspace folders it points
+  // into are never touched by the uninstaller.
+  KeepData := True;
+  if UninstallSilent then
+    exit;
+  KeepData :=
+    MsgBox(
+      'Keep the Wish data folder (sessions, skills, settings) in ' +
+      ExpandConstant('{userdocs}') + '\Wish?' + #13#10 +
+      'Choose Yes to keep it, No to delete it.',
+      mbConfirmation, MB_YESNO) = IDYES;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if (CurUninstallStep = usPostUninstall) and (not KeepData) then
+    DelTree(ExpandConstant('{userdocs}\Wish'), True, True, True);
 end;
 
 [Run]

@@ -199,6 +199,10 @@ impl ShellTool {
     let shell =
       self.inner.config.command.read().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
     let mut builder = Command::new(&shell.program);
+    // Bundled tools resolve next to the executable; the session env below can still override PATH.
+    if let Some(path) = crate::tool::bundled::child_path() {
+      builder.env("PATH", path);
+    }
     builder
       .args(&shell.args)
       .current_dir(&self.inner.config.cwd)

@@ -27,6 +27,9 @@ impl ShadowRepo {
 
   fn command(&self) -> Command {
     let mut command = Command::new("git");
+    if let Some(path) = super::bundled::child_path() {
+      command.env("PATH", path);
+    }
     command
       .env("GIT_DIR", &self.git_dir)
       .env("GIT_WORK_TREE", &self.work_tree)
@@ -62,6 +65,9 @@ impl ShadowRepo {
         .await
         .map_err(|error| ToolOutcome::Failed(format!("snapshot dir: {error}")))?;
       let mut init = Command::new("git");
+      if let Some(path) = super::bundled::child_path() {
+        init.env("PATH", path);
+      }
       init.arg("init").arg("--bare").arg(&self.git_dir).kill_on_drop(true);
       let output = init.output().await
         .map_err(|error| ToolOutcome::Failed(format!("git init failed: {error}")))?;
@@ -79,6 +85,9 @@ impl ShadowRepo {
 
   async fn git_raw(&self, args: &[&str]) -> Result<(), ToolOutcome> {
     let mut command = Command::new("git");
+    if let Some(path) = super::bundled::child_path() {
+      command.env("PATH", path);
+    }
     command.args(["--git-dir"]).arg(&self.git_dir).args(args).kill_on_drop(true);
     let output = command.output().await
       .map_err(|error| ToolOutcome::Failed(format!("git failed: {error}")))?;

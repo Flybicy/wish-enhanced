@@ -50,8 +50,13 @@ impl McpRegistry {
   /// Spawns the server process and completes the initialize handshake. A server that
   /// fails to start or answer initialize is not registered; retry with a corrected spec.
   pub async fn start(&self, id: &str, spec: &McpServerSpec) -> Result<(), String> {
-    let mut child = Command::new(&spec.command)
-      .args(&spec.args)
+    let mut command = Command::new(&spec.command);
+    command.args(&spec.args);
+    // Bundled tools resolve next to the executable; the server env can still override PATH.
+    if let Some(path) = super::bundled::child_path() {
+      command.env("PATH", path);
+    }
+    let mut child = command
       .envs(&spec.env)
       .stdin(Stdio::piped())
       .stdout(Stdio::piped())

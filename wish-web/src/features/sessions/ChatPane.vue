@@ -18,6 +18,7 @@ import Icon from '../../ui/components/Icon.vue';
 import Menu from '../../ui/components/Menu.vue';
 import ChatLog from './ChatLog.vue';
 import Composer from './Composer.vue';
+import SessionStatsLine from './SessionStatsLine.vue';
 import QueueDock from './QueueDock.vue';
 import InfoPane from './InfoPane.vue';
 import SearchPane from './SearchPane.vue';
@@ -131,6 +132,7 @@ const goTab = (t: SessionTab) => {
       </Transition>
     </div>
     <Composer ref="composerRef" :session-id="id" :mobile="isMobile" />
+    <SessionStatsLine :snapshot="snapshot" />
     <RouterView v-slot="{ Component, route: panelRoute }">
       <component :is="Component" v-if="isMobile" :key="panelRoute.fullPath" @close="closeTab(panelRoute.fullPath)" />
     </RouterView>

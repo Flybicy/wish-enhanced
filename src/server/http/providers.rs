@@ -115,11 +115,18 @@ pub async fn models(
   Query(query): Query<CatalogQuery>,
 ) -> Result<Json<Value>, ApiError> {
   let provider = app.get_provider(&id)?;
-  let path = provider
+  let Some(path) = provider
     .config
     .model_list_path
     .as_deref()
-    .ok_or_else(|| ApiError::bad_request("model_list_path is not configured"))?;
+    .filter(|path| !path.is_empty())
+  else {
+    // No catalog path configured: infer one from the protocol, so a saved
+    // hand-written provider still lists its models without extra setup.
+    return Ok(Json(
+      draft_catalog(&app, provider.config.clone(), query.cursor, query.limit).await?,
+    ));
+  };
   let mut page = ModelListQuery::first(
     provider.config.model_list_base_url.as_deref().unwrap_or(&provider.config.base_url),
     path,
@@ -146,18 +153,15 @@ pub struct ProbeQuery {
   cursor: Option<String>,
   limit: Option<u32>,
 }
-/// List models for an unsaved draft provider, so the setup wizard can offer a
-/// picker before anything reaches the configuration. The key travels in memory
-/// only and nothing is persisted or cached across calls.
-pub async fn probe_models(
-  State(app): State<Arc<App>>,
-  Query(query): Query<ProbeQuery>,
-  Json(draft): Json<crate::server::provider::ProviderConfig>,
-) -> Result<Json<Value>, ApiError> {
-  app.require_open()?;
-  // A custom provider arrives without a lister kind; infer it from the
-  // protocol so the wizard's picker works for hand-written endpoints too.
-  let mut draft = draft;
+/// Lists models for a provider configuration that may not name a catalog
+/// endpoint: the lister kind and the /v1/models path are inferred from the
+/// protocol. Nothing is persisted and the key travels in memory only.
+async fn draft_catalog(
+  app: &Arc<App>,
+  mut draft: crate::server::provider::ProviderConfig,
+  cursor: Option<String>,
+  limit: Option<u32>,
+) -> Result<Value, ApiError> {
   if draft.model_list.is_none() {
     draft.model_list = Some(match draft.protocol.as_str() {
       "anthropic_messages" => "anthropic_models".into(),
@@ -181,16 +185,24 @@ pub async fn probe_models(
   let provider = crate::server::provider::Provider::build(draft, &proxy)?;
   let mut page = ModelListQuery::first(&base, &path);
   page.unauthenticated = matches!(provider.config.auth, crate::server::provider::Auth::None);
-  page.cursor = query.cursor;
-  if let Some(limit) = query.limit {
+  page.cursor = cursor;
+  if let Some(limit) = limit {
     page.page_size = limit;
   }
   let catalog = provider.catalog.page(&provider.client, &page).await?;
-  Ok(Json(
-    json!({"protocol":catalog.protocol.get_id(),"items":catalog.models.into_iter().map(|m|json!({
-      "id":m.id,"name":m.name,"owner":m.owner,"created_at":m.created_at,"context_window":m.context_window,"max_output_tokens":m.max_output_tokens
-    })).collect::<Vec<_>>(),"next_cursor":catalog.next_cursor,"warnings":catalog.warnings}),
-  ))
+  Ok(json!({"protocol":catalog.protocol.get_id(),"items":catalog.models.into_iter().map(|m|json!({
+    "id":m.id,"name":m.name,"owner":m.owner,"created_at":m.created_at,"context_window":m.context_window,"max_output_tokens":m.max_output_tokens
+  })).collect::<Vec<_>>(),"next_cursor":catalog.next_cursor,"warnings":catalog.warnings}))
+}
+/// List models for an unsaved draft provider, so the setup wizard can offer a
+/// picker before anything reaches the configuration.
+pub async fn probe_models(
+  State(app): State<Arc<App>>,
+  Query(query): Query<ProbeQuery>,
+  Json(draft): Json<crate::server::provider::ProviderConfig>,
+) -> Result<Json<Value>, ApiError> {
+  app.require_open()?;
+  Ok(Json(draft_catalog(&app, draft, query.cursor, query.limit).await?))
 }
 pub async fn account(
   State(app): State<Arc<App>>,

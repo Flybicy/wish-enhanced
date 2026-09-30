@@ -6,8 +6,8 @@ use crate::{
   executor::{self, ExecutionControl},
   protocol::StreamEvent,
   session::{
-    Entry, EntryId, Generation, HistoryReader, RunOutcome, Session, SessionConfig, SessionEvent,
-    SessionHandle,
+    Entry, EntryId, EntryOrigin, Generation, HistoryReader, RunOutcome, Session, SessionConfig,
+    SessionEvent, SessionHandle,
     statistics::{ModelCallPurpose, ModelCallRecord, ModelCallStatus},
   },
   storage::ReadList,
@@ -71,6 +71,8 @@ pub struct SessionSlot {
   pub entries: ReadList<Entry>,
   pub generations: ReadList<Generation>,
   pub calls: ReadList<ModelCallRecord>,
+  /// Settled folds behind the snapshot stats block; see stats_value.
+  stats: Mutex<StatsMemo>,
   pub queue: Mutex<ReadList<EntryId>>,
   pub tools: SessionTools,
   /// The command this session's shell tool starts; None without a shell tool.
@@ -172,7 +174,10 @@ impl SessionSlot {
     };
     let tools =
       SessionTools::new(shell, &session, app.clone(), descriptor.id.clone(), image_dir.clone(), snapshot_tool, skills, memory);
-    let status = Mutex::new(snapshot(&session));
+    let entries = session.get_entries();
+    let calls = session.get_model_calls();
+    let mut stats_memo = StatsMemo::default();
+    let status = Mutex::new(snapshot(&session, stats_value(&entries, &calls, &mut stats_memo)));
     let (events, _) = broadcast::channel(256);
     Ok(Arc::new(Self {
       descriptor: RwLock::new(descriptor),
@@ -182,9 +187,10 @@ impl SessionSlot {
       deleted: std::sync::atomic::AtomicBool::new(false),
       handle: session.create_handle(),
       history: session.create_history_reader(),
-      entries: session.get_entries(),
+      entries,
       generations: session.get_generations(),
-      calls: session.get_model_calls(),
+      calls,
+      stats: Mutex::new(stats_memo),
       queue: Mutex::new(session.get_message_queue()),
       session: Arc::new(AsyncMutex::new(session)),
       selection_edit: Arc::new(AsyncMutex::new(())),
@@ -321,7 +327,12 @@ impl SessionSlot {
   }
   pub fn update_snapshot(&self, session: &Session) {
     *self.queue.lock().unwrap() = session.get_message_queue();
-    *self.status.lock().unwrap() = snapshot(session);
+    *self.status.lock().unwrap() = self.refresh_status(session);
+  }
+  /// Rebuilds the status with fresh stats folds; the memo keeps each read cheap.
+  fn refresh_status(&self, session: &Session) -> Value {
+    let mut memo = self.stats.lock().unwrap();
+    snapshot(session, stats_value(&self.entries, &self.calls, &mut memo))
   }
   pub fn interrupt(&self) -> bool {
     self.auto_run_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -424,7 +435,7 @@ impl SessionSlot {
     };
     {
       let mut status = self.status.lock().unwrap();
-      *status = snapshot(&session);
+      *status = self.refresh_status(&session);
       status["last_operation"] = event.clone();
     }
     {
@@ -473,10 +484,96 @@ fn web_outcome(outcome: &RunOutcome) -> Value {
     _ => json!(outcome),
   }
 }
-fn snapshot(session: &Session) -> Value {
+fn snapshot(session: &Session, stats: Value) -> Value {
   json!({"phase":session.get_state().get_phase(),"state":session.get_state(),
     "active_generation":session.get_active_generation().ok().map(|g|g.id),"metadata":session.get_metadata(),"config":session.get_config(),"queue_head":session.get_queue_head(),"running":false,"standby_preparing":false,
-    "context_tokens":context_tokens(session)})
+    "context_tokens":context_tokens(session),"stats":stats})
+}
+/// Running totals behind the stats line under the composer. Settled entries
+/// and model calls fold into the memo once; the unsettled tail is summed per
+/// read because live records are updated in place.
+#[derive(Default)]
+struct StatsMemo {
+  entries: u64,
+  turns: u64,
+  calls: u64,
+  steps: u64,
+  input_tokens: u64,
+  output_tokens: u64,
+  cached_tokens: u64,
+}
+impl StatsMemo {
+  fn fold(&mut self, call: &ModelCallRecord) {
+    if call.purpose == ModelCallPurpose::Conversation {
+      self.steps += 1;
+    }
+    self.input_tokens += call.usage.input_tokens.unwrap_or(0);
+    self.output_tokens += call.usage.output_tokens.unwrap_or(0);
+    self.cached_tokens += call.usage.cached_input_tokens.unwrap_or(0);
+  }
+}
+/// Folds new settled records into memo, then builds the snapshot stats block
+/// from the memo plus the live tail. A shrinking store means it was replaced;
+/// everything restarts from scratch.
+fn stats_value(
+  entries: &ReadList<Entry>,
+  calls: &ReadList<ModelCallRecord>,
+  memo: &mut StatsMemo,
+) -> Value {
+  let entry_len = entries.len().unwrap_or(0);
+  let call_len = calls.len().unwrap_or(0);
+  if entry_len < memo.entries || call_len < memo.calls {
+    *memo = StatsMemo::default();
+  }
+  while memo.entries < entry_len {
+    let Ok(Some(entry)) = entries.get(memo.entries) else { break };
+    if entry.origin == EntryOrigin::Input {
+      memo.turns += 1;
+    }
+    memo.entries += 1;
+  }
+  while memo.calls < call_len {
+    let Ok(Some(call)) = calls.get(memo.calls) else { break };
+    if call.status == ModelCallStatus::Running {
+      break;
+    }
+    memo.fold(&call);
+    memo.calls += 1;
+  }
+  let mut live = StatsMemo::default();
+  for position in memo.calls..call_len {
+    if let Ok(Some(call)) = calls.get(position) {
+      live.fold(&call);
+    }
+  }
+  // The speed of the most recent finished conversation call, in tokens/second.
+  let mut rate = None;
+  for position in (0..call_len).rev() {
+    let Ok(Some(call)) = calls.get(position) else { continue };
+    if call.purpose != ModelCallPurpose::Conversation
+      || call.status != ModelCallStatus::Completed
+    {
+      continue;
+    }
+    let output = call.usage.output_tokens.unwrap_or(0);
+    let seconds = match (call.first_event_at, call.finished_at) {
+      (Some(first), Some(last)) if last.0 > first.0 => Some((last.0 - first.0) as f64 / 1000.0),
+      _ => call.elapsed_ms.map(|ms| ms as f64 / 1000.0),
+    };
+    if let Some(seconds) = seconds
+      && seconds > 0.0
+    {
+      rate = Some(output as f64 / seconds);
+    }
+    break;
+  }
+  let input_tokens = memo.input_tokens + live.input_tokens;
+  let cached_tokens = memo.cached_tokens + live.cached_tokens;
+  json!({"turns":memo.turns,"steps":memo.steps + live.steps,
+    "input_tokens":input_tokens,"output_tokens":memo.output_tokens + live.output_tokens,
+    "cached_tokens":cached_tokens,
+    "cache_hit":(input_tokens > 0).then(|| cached_tokens as f64 / input_tokens as f64),
+    "rate":rate})
 }
 /// The input size compaction compares with its trigger: the last completed
 /// conversation call of the active generation made with the configured model.

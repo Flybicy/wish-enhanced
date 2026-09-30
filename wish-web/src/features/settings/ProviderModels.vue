@@ -150,7 +150,10 @@ function importModel(id:string){
   props.value.models[id]=withNewModelDefaults({context_window_tokens:model.context_window,max_output_tokens:model.max_output_tokens??props.preset?.max_output_tokens,supports_reasoning:model.supports_reasoning,default_reasoning_effort:model.default_reasoning_effort,reasoning_efforts:model.reasoning_efforts});
   catalogOpen.value=false;
 }
-function openAdd(){if(props.value.model_list)void readCatalog();else edit();}
+// Always try the upstream catalog first: saved providers without a configured
+// catalog path are probed server-side by protocol, and the modal keeps a
+// manual "Custom" escape hatch for anything the endpoint cannot list.
+function openAdd(){void readCatalog();}
 function openCustom(){customAfterCatalog=true;catalogModal.value?.close();}
 function closeCatalog(){
   catalogOpen.value=false;

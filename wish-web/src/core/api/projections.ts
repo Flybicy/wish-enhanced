@@ -27,6 +27,18 @@ export interface SessionDescriptor {
   pending_selection?: unknown;
 }
 export type SessionPhase = 'compacting' | 'running' | 'queued' | 'idle';
+/** Cumulative counters behind the stats line under the composer. */
+export interface SessionStats {
+  turns: number;
+  steps: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+  /** cached/input share of finished calls; null before any input. */
+  cache_hit: number | null;
+  /** Tokens/second of the last finished conversation call; null until one. */
+  rate: number | null;
+}
 export interface SessionView {
   id: string; name: string; provider: string; model: string;
   reasoning_effort: string | undefined; metadata: any;
@@ -36,6 +48,7 @@ export interface SessionView {
   resume_requires_user: boolean; compaction_count: number;
   standby_preparing: boolean;
   context_tokens: number | null;
+  stats: SessionStats | null;
   last_error: DisplayFailure | null;
   agent_custom: any; config: SessionConfig; descriptor: SessionDescriptor; status: any;
 }
@@ -81,6 +94,7 @@ export function sessionView(value: any): SessionView {
     standby_preparing: Boolean(status.standby_preparing),
     // Input size of the last conversation call in the active context; null until one completes.
     context_tokens: status.context_tokens ?? null,
+    stats: status.stats ?? null,
     last_error: operationFailure(status.last_operation),
     agent_custom: status.metadata?.agent_custom, config, descriptor: session, status,
   };
