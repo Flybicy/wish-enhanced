@@ -154,25 +154,56 @@ impl SessionTools {
 }
 impl ToolExecutor for SessionTools {
   async fn execute(&self, call: &ToolCall, control: &ExecutionControl) -> ToolOutcome {
-    if has_side_effects(&call.name) {
-      let Some(app) = self.app.upgrade() else {
-        return ToolOutcome::Failed("application is shutting down".into());
-      };
-      let Ok(slot) = app.get_session(&self.session_id).await else {
-        return ToolOutcome::Failed("session is unavailable".into());
-      };
-      match slot.permission() {
-        PermissionMode::Operate => {}
-        PermissionMode::ReadOnly => return denied_read_only(&call.name),
-        PermissionMode::Ask => match self.request_approval(&app, &slot, call, control).await {
-          Approval::Granted => {}
-          Approval::Denied => return ToolOutcome::Failed("denied by user".into()),
-          Approval::Cancelled => return ToolOutcome::Cancelled,
-          Approval::Error(message) => return ToolOutcome::Failed(message),
+    let app = self.app.upgrade();
+    let slot = match &app {
+      Some(app) => app.get_session(&self.session_id).await.ok(),
+      None => None,
+    };
+    let mut approval = None;
+    let outcome = if has_side_effects(&call.name) {
+      match (app.as_ref(), slot.as_ref()) {
+        (None, _) => ToolOutcome::Failed("application is shutting down".into()),
+        (_, None) => ToolOutcome::Failed("session is unavailable".into()),
+        (Some(app), Some(slot)) => match slot.permission() {
+          PermissionMode::Operate => self.dispatch(call, control).await,
+          PermissionMode::ReadOnly => denied_read_only(&call.name),
+          PermissionMode::Ask => match self.request_approval(app, slot, call, control).await {
+            Approval::Granted => {
+              approval = Some("granted");
+              self.dispatch(call, control).await
+            }
+            Approval::Denied => {
+              approval = Some("denied");
+              ToolOutcome::Failed("denied by user".into())
+            }
+            Approval::Cancelled => {
+              approval = Some("cancelled");
+              ToolOutcome::Cancelled
+            }
+            Approval::Error(message) => ToolOutcome::Failed(message),
+          },
         },
       }
+    } else {
+      self.dispatch(call, control).await
+    };
+    // Minimal audit trail on the session's own event stream (the export path).
+    // It records the outcome as a name and a redacted argument summary only —
+    // never the tool's payload, which may embed secrets.
+    if let Some(slot) = &slot {
+      let _ = slot.events.send(json!({
+        "type": "tool_audit",
+        "tool": call.name,
+        "call_id": call.call_id,
+        "session_id": self.session_id,
+        "generation": slot.auto_run_generation.load(Ordering::SeqCst),
+        "approval": approval,
+        "outcome": outcome_name(&outcome),
+        "time": crate::session::statistics::Timestamp::now().0,
+        "args": preview(&call.arguments),
+      }));
     }
-    self.dispatch(call, control).await
+    outcome
   }
 }
 
@@ -278,10 +309,30 @@ impl From<bool> for Approval {
   }
 }
 
+/// How long a pending approval may wait before the executor stops blocking
+/// the run. A missed decision aborts the call; it never auto-grants.
+const APPROVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Removes the approval entry when dropped. Held across every await of the
+/// request — including cancellation — so a dropped future can never leave a
+/// dangling sender behind in the registry.
+struct ApprovalGuard<'a> {
+  app: &'a Arc<App>,
+  slot: &'a Arc<super::SessionSlot>,
+  key: crate::server::app::ApprovalKey,
+}
+impl Drop for ApprovalGuard<'_> {
+  fn drop(&mut self) {
+    self.app.approvals.lock().unwrap().remove(&self.key);
+    self.slot.clear_pending_approval(&self.key.call_id, self.key.generation);
+  }
+}
+
 impl SessionTools {
   /// Ask mode: publish the call as awaiting approval on the session's event
-  /// stream and wait for the user's decision. The registry entry is removed on
-  /// every exit path, so nothing leaks.
+  /// stream and wait for the user's decision. The entry is keyed by the run
+  /// generation that asked and removed by a drop guard on every exit path,
+  /// so nothing leaks and a stale answer cannot resolve a newer run.
   async fn request_approval(
     &self,
     app: &Arc<App>,
@@ -290,7 +341,11 @@ impl SessionTools {
     control: &ExecutionControl,
   ) -> Approval {
     let (sender, receiver) = tokio::sync::oneshot::channel();
-    let key = (self.session_id.clone(), call.call_id.clone());
+    let key = crate::server::app::ApprovalKey {
+      session_id: self.session_id.clone(),
+      generation: slot.auto_run_generation.load(Ordering::SeqCst),
+      call_id: call.call_id.clone(),
+    };
     {
       let mut approvals = app.approvals.lock().unwrap();
       if approvals.contains_key(&key) {
@@ -298,53 +353,175 @@ impl SessionTools {
       }
       approvals.insert(key.clone(), sender);
     }
+    let _guard = ApprovalGuard { app, slot, key: key.clone() };
+    let summary = preview(&call.arguments);
     let _ = slot.events.send(json!({
       "type": "approval_required",
       "call_id": call.call_id,
       "name": call.name,
-      "summary": preview(&call.arguments),
+      "generation": key.generation,
+      "summary": summary.clone(),
     }));
+    // Keep the card in the status snapshot AND the live preview so a UI
+    // refresh or SSE reconnect cannot lose it.
+    slot.note_pending_approval(&call.call_id, &call.name, &summary, key.generation);
     let approval = tokio::select! {
-      decision = receiver => Approval::from(decision.unwrap_or(false)),
+      decision = receiver => match decision {
+        Ok(granted) => Approval::from(granted),
+        // The sender was dropped (interrupt, shutdown, mode switch): the run
+        // moved on without a decision, so the call is cancelled, not granted.
+        Err(_) => Approval::Cancelled,
+      },
       _ = control.wait_for_cancellation() => Approval::Cancelled,
+      _ = tokio::time::sleep(APPROVAL_TIMEOUT) => Approval::Error("approval request timed out".into()),
     };
-    app.approvals.lock().unwrap().remove(&key);
     approval
   }
 }
 
-/// Tools that reach the world outside this process. Read-only tools never gate.
-pub(crate) fn has_side_effects(name: &str) -> bool {
+/// Tools that only observe state this session already owns. The allowlist is
+/// positive evidence: anything not named here — including unknown, future or
+/// MCP-exposed tools — is treated as a side effect.
+pub(crate) fn is_read_only(name: &str) -> bool {
   matches!(
     name,
-    "shell_start"
-      | "shell_edit"
-      | "shell_write"
-      | "shell_kill"
-      | "snapshot_undo"
-      | "snapshot_redo"
-      | "subagent"
-  ) || name.starts_with("mcp_")
+    "history_search"
+      | "history_read"
+      | "history_query"
+      | "shell_poll"
+      | "view_image"
+      | "skill_search"
+      | "memory_recall"
+      | "subagent_result"
+  )
+}
+/// Whether the tool must pass the session's permission gate. Deny by default:
+/// a tool name that is not positively read-only can never escape read-only or
+/// ask mode by simply being unlisted.
+pub(crate) fn has_side_effects(name: &str) -> bool {
+  !is_read_only(name)
 }
 
 fn denied_read_only(name: &str) -> ToolOutcome {
   ToolOutcome::Failed(format!("denied: session is read-only ({name} is a side-effect tool)"))
 }
 
-/// A compact JSON preview of a call's arguments for the approval card.
+/// Keys whose values must never reach a UI card, an SSE event or a log line.
+fn is_sensitive_key(key: &str) -> bool {
+  const MARKERS: [&str; 13] = [
+    "token",
+    "secret",
+    "password",
+    "passwd",
+    "credential",
+    "authoriz",
+    "cookie",
+    "private_key",
+    "api_key",
+    "apikey",
+    "auth",
+    "bearer",
+    "passphrase",
+  ];
+  let key = key.to_lowercase();
+  MARKERS.iter().any(|marker| key.contains(marker))
+}
+/// Masks credentials embedded in free text: `Bearer <credential>` headers and
+/// `password=…`-style assignments. Unrelated text passes through untouched.
+fn mask_credentials(text: &str) -> String {
+  const KEYS: [&str; 6] = ["password", "passwd", "token", "secret", "api_key", "apikey"];
+  let lower = text.to_ascii_lowercase();
+  let mut out = String::with_capacity(text.len());
+  let mut cursor = 0;
+  while cursor < text.len() {
+    if lower[cursor..].starts_with("bearer") {
+      let rest = &text[cursor + "bearer".len()..];
+      let spaces = rest.len() - rest.trim_start_matches([' ', '\t']).len();
+      let value_start = cursor + "bearer".len() + spaces;
+      if spaces > 0 && value_start < text.len() {
+        out.push_str(&text[cursor..value_start]);
+        out.push_str("[redacted]");
+        let value_len = text[value_start..]
+          .find(|ch: char| ch.is_whitespace() || ch == '\'' || ch == '"')
+          .unwrap_or(text.len() - value_start);
+        cursor = value_start + value_len;
+        continue;
+      }
+    }
+    if let Some(key) = KEYS.iter().find(|key| lower[cursor..].starts_with(**key)) {
+      let assign = cursor + key.len();
+      if text[assign..].starts_with('=') {
+        let value_start = assign + 1;
+        let value_len = text[value_start..]
+          .find(|ch: char| ch.is_whitespace() || ch == '\'' || ch == '"')
+          .unwrap_or(text.len() - value_start);
+        out.push_str(&text[cursor..value_start]);
+        out.push_str("[redacted]");
+        cursor = value_start + value_len;
+        continue;
+      }
+    }
+    let ch = text[cursor..].chars().next().unwrap();
+    out.push(ch);
+    cursor += ch.len_utf8();
+  }
+  out
+}
+/// Redacts everything that leaves the process through approval cards or the
+/// audit stream: sensitive keys are replaced recursively, and well-known
+/// credential carriers inside strings are masked in place.
+pub(crate) fn redact(value: &Value) -> Value {
+  match value {
+    Value::Object(map) => Value::Object(
+      map
+        .iter()
+        .map(|(key, item)| {
+          if is_sensitive_key(key) {
+            (key.clone(), Value::String("[redacted]".into()))
+          } else {
+            (key.clone(), redact(item))
+          }
+        })
+        .collect(),
+    ),
+    Value::Array(items) => Value::Array(items.iter().map(redact).collect()),
+    Value::String(text) => Value::String(mask_credentials(text)),
+    other => other.clone(),
+  }
+}
+/// The audit outcome is a name, never the payload: a tool's own output may
+/// embed secrets and must not widen the logging surface.
+fn outcome_name(outcome: &ToolOutcome) -> &'static str {
+  match outcome {
+    ToolOutcome::Success(_) => "success",
+    ToolOutcome::SuccessWithInput { .. } => "success_with_input",
+    ToolOutcome::SuccessWithMetadata { .. } => "success_with_metadata",
+    ToolOutcome::Failed(_) => "failed",
+    ToolOutcome::Cancelled => "cancelled",
+    ToolOutcome::Unknown(_) => "unknown",
+  }
+}
+/// Upper bound of a previewed argument blob. A long shell command needs most
+/// of its tail visible to be reviewable, so the budget is generous; the cap
+/// still exists so one argument cannot flood the event stream.
+const PREVIEW_LIMIT: usize = 2048;
+
+/// A compact JSON preview of a call's arguments for the approval card and the
+/// audit event. Redaction runs before truncation so the cut cannot hide an
+/// unmasked tail.
 fn preview(arguments: &Value) -> String {
-  let text = arguments.to_string();
-  if text.chars().count() <= 200 {
+  let text = redact(arguments).to_string();
+  if text.chars().count() <= PREVIEW_LIMIT {
     return text;
   }
-  let mut summary: String = text.chars().take(200).collect();
+  let mut summary: String = text.chars().take(PREVIEW_LIMIT).collect();
   summary.push('…');
   summary
 }
 
 #[cfg(test)]
 mod tests {
-  use super::{denied_read_only, has_side_effects, preview};
+  use super::{denied_read_only, has_side_effects, is_read_only, mask_credentials, preview, redact};
   use crate::executor::tool::ToolOutcome;
   use serde_json::json;
 
@@ -357,23 +534,30 @@ mod tests {
       "shell_kill",
       "snapshot_undo",
       "snapshot_redo",
+      "snapshot_checkpoint",
       "subagent",
+      "web_search",
+      "fetch_content",
+      "get_search_content",
       "mcp_server_tool",
+      // Unknown or future names are side effects until positively read-only.
+      "future_tool",
+      "",
     ] {
       assert!(has_side_effects(name), "{name} must be a side effect");
     }
     for name in [
       "shell_poll",
-      "snapshot_checkpoint",
       "view_image",
       "history_search",
-      "web_search",
-      "fetch_content",
+      "history_read",
+      "history_query",
       "skill_search",
       "memory_recall",
       "subagent_result",
     ] {
       assert!(!has_side_effects(name), "{name} must be read-only");
+      assert!(is_read_only(name));
     }
   }
 
@@ -389,11 +573,58 @@ mod tests {
   }
 
   #[test]
+  fn preview_redacts_sensitive_keys_recursively() {
+    let previewed = preview(&json!({
+      "command": "deploy",
+      "headers": {"Authorization": "Bearer sk-live-123", "api_key": "abc"},
+      "nested": {"password": "hunter2", "safe": "value"},
+    }));
+    assert!(previewed.contains("[redacted]"), "{previewed}");
+    assert!(!previewed.contains("sk-live-123"), "{previewed}");
+    assert!(!previewed.contains("hunter2"), "{previewed}");
+    assert!(!previewed.contains("abc"), "{previewed}");
+    assert!(previewed.contains("deploy"), "{previewed}");
+    assert!(previewed.contains("value"), "{previewed}");
+  }
+
+  #[test]
+  fn redaction_masks_credentials_inside_free_text() {
+    assert_eq!(
+      mask_credentials("curl -H 'Authorization: Bearer sk-123' url"),
+      "curl -H 'Authorization: Bearer [redacted]' url"
+    );
+    assert_eq!(mask_credentials("echo password=hunter2 now"), "echo password=[redacted] now");
+    assert_eq!(mask_credentials("echo token=abc"), "echo token=[redacted]");
+    // Unrelated text passes through untouched, including bearer-like words.
+    assert_eq!(mask_credentials("echo hello world"), "echo hello world");
+    assert_eq!(mask_credentials("bearer of bad news"), "bearer [redacted] bad news");
+  }
+
+  #[test]
+  fn redact_preserves_non_sensitive_structure() {
+    let value = redact(&json!({"a": [1, "two", {"b": true}], "c": null}));
+    assert_eq!(value, json!({"a": [1, "two", {"b": true}], "c": null}));
+  }
+
+  #[test]
   fn previews_truncate_long_arguments() {
     assert_eq!(preview(&json!({"command": "ls"})), r#"{"command":"ls"}"#);
     let truncated = preview(&json!({"text": "x".repeat(300)}));
-    assert_eq!(truncated.chars().count(), 201);
-    assert!(truncated.ends_with('…'));
+    assert_eq!(truncated, json!({"text": "x".repeat(300)}).to_string());
+  }
+
+  #[test]
+  fn previews_keep_long_command_tails() {
+    // A long command must stay reviewable past the old 200-char budget.
+    let command = format!("echo start;{}", "y".repeat(5000));
+    let previewed = preview(&json!({"command": command}));
+    assert_eq!(previewed.chars().count(), super::PREVIEW_LIMIT + 1);
+    assert!(previewed.ends_with('…'));
+    assert!(previewed.contains("echo start;"));
+    // Redaction happens before the cut: no secret survives anywhere.
+    let secret = format!("echo start; token={}", "SECRET_VALUE".repeat(5000));
+    let previewed = preview(&json!({"command": secret}));
+    assert!(!previewed.contains("SECRET_VALUE"), "{previewed}");
   }
 }
 

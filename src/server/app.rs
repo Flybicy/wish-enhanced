@@ -51,9 +51,21 @@ pub struct App {
   pub subagents: Arc<crate::server::subagents::SubagentManager>,
   /// Whether the configuration enables subagent delegation.
   pub subagents_enabled: bool,
-  /// Pending ask-mode approvals, keyed by (session id, tool call id). The
-  /// sender resolves the waiting tool executor; removal cancels nothing.
-  pub(crate) approvals: Mutex<HashMap<(String, String), tokio::sync::oneshot::Sender<bool>>>,
+  /// Pending ask-mode approvals, keyed by session, run generation and call
+  /// id, so a decision can only land on the run that asked for it. Removing a
+  /// sender (interrupt, mode switch, shutdown) leaves the executor no decision.
+  pub(crate) approvals: Mutex<HashMap<ApprovalKey, tokio::sync::oneshot::Sender<bool>>>,
+}
+
+/// Key of one pending ask-mode approval. The generation binds the decision to
+/// the run that asked: SessionSlot::interrupt bumps the generation and cancels
+/// the wait, so a late answer is rejected as stale instead of resolving a run
+/// that never asked.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ApprovalKey {
+  pub session_id: String,
+  pub generation: u64,
+  pub call_id: String,
 }
 impl App {
   pub async fn open(config: &Config, config_path: PathBuf) -> Result<Arc<Self>, ApiError> {
@@ -339,11 +351,29 @@ impl App {
     sessions.insert(slot.get_descriptor().id.clone(), slot.clone());
     Ok(slot)
   }
+  /// Drops every pending approval of one session — optionally only one
+  /// generation. The waiting executors then observe a cancelled decision;
+  /// returns how many were dropped.
+  pub(crate) fn cancel_approvals(&self, session_id: &str, generation: Option<u64>) -> usize {
+    let mut approvals = self.approvals.lock().unwrap();
+    let stale: Vec<ApprovalKey> = approvals
+      .keys()
+      .filter(|key| key.session_id == session_id && generation.map_or(true, |g| key.generation == g))
+      .cloned()
+      .collect();
+    for key in &stale {
+      approvals.remove(key);
+    }
+    stale.len()
+  }
   pub async fn begin_shutdown(&self) {
     *self.closing.lock().unwrap() = true;
     self.stop.cancel();
     for slot in self.sessions.lock().await.values() {
       slot.interrupt();
+      // A pending approval can never be answered once the server is going
+      // away; dropping it lets the blocked executor unwind instead of hanging.
+      self.cancel_approvals(&slot.get_descriptor().id, None);
     }
   }
   pub async fn finish_shutdown(&self) -> Result<(), ApiError> {

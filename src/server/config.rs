@@ -12,6 +12,10 @@ use std::{collections::BTreeMap, net::SocketAddr, path::PathBuf};
 pub struct Config {
   pub listen: SocketAddr,
   pub data_dir: PathBuf,
+  /// Name of the environment variable holding the bearer token that
+  /// `/api` requires for write calls. Unset (or holding an empty value, which
+  /// fails startup) leaves the server read-only: reads and diagnostics answer,
+  /// every write is rejected.
   pub bearer_token_env: Option<String>,
   pub providers: BTreeMap<String, ProviderConfig>,
   pub proxy: ProxyConfig,
