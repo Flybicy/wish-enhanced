@@ -15,6 +15,14 @@ writable by the Wish process, and so must its directory (saves are written to
 a temporary file and renamed into place). Most changes apply immediately; see
 [what needs a restart](#applying-changes).
 
+Without `--config`, a first run (a double-click, say) looks for `config.json`
+beside the executable and then in the per-platform user folder —
+`Documents\Wish` on Windows, `~/Library/Application Support/Wish` on macOS,
+`$XDG_CONFIG_HOME/wish` (else `~/.config/wish`) on Linux — and writes a default
+one there. Its `data_dir` points inside that same folder, so user data never
+lands in the install directory, and an existing Windows `Documents\Wish`
+folder keeps being used as-is.
+
 - [A complete example](#a-complete-example)
 - [Top-level fields](#top-level-fields)
 - [Providers](#providers)
@@ -76,7 +84,7 @@ fields are rejected everywhere, so typos fail loudly.
 | --- | --- | --- |
 | `listen` | `"127.0.0.1:9780"` | Address and port to listen on, as `IP:port` (`[::1]:9780` for IPv6). Host names are not accepted |
 | `data_dir` | `"data"` | Where sessions and attachments are stored. A relative path is resolved against the directory Wish is started from, so prefer an absolute path |
-| `bearer_token_env` | `null` | Name of an environment variable holding the API access token. When set, every `/api` request needs `Authorization: Bearer <token>`, and web pages on other origins may call the API (they still need the token). The variable must be set and non-empty at startup |
+| `bearer_token_env` | `null` | Name of an environment variable holding the API access token. When set, every `/api` request needs `Authorization: Bearer <token>`; write requests are accepted only from this server's own origin or a CLI. The variable must be set and non-empty at startup. When unset, reads work but all write requests fail closed with HTTP 401 |
 | `providers` | `{}` | Model providers by ID; see [Providers](#providers) |
 | `defaults` | | Defaults for new sessions; see [Session defaults](#session-defaults) |
 | `proxy` | environment | Outbound proxy; see [Proxy](#proxy) |

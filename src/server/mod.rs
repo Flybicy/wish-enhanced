@@ -19,8 +19,9 @@ mod shell_window;
 mod skills;
 mod subagents;
 
+use std::ffi::OsStr;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// How the interface is presented once the HTTP service is up.
@@ -89,7 +90,9 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
 One HTTP service for providers and sessions, with a web interface.
 
 Without --config, wish looks for config.json beside the executable, then in the
-user's Documents\\Wish folder, generating a default one there on first run.
+user's platform folder (Documents\\Wish on Windows, ~/Library/Application
+Support/Wish on macOS, ~/.config/wish on Linux), generating a default one there
+on first run.
 --port overrides the listen port from the config for this run only.
 Without other flags wish opens its interface in an application window;
 --no-window serves headless and --browser uses the system browser instead.
@@ -156,6 +159,9 @@ session list).
         #[cfg(not(windows))]
         {
           let _ = profile;
+          // No native WebView host exists off Windows yet: say the system
+          // browser is the fallback instead of implying a window opened.
+          cli_out("wish has no native window on this platform yet; falling back to the system browser\n");
           open_system_browser(addr);
         }
       } else {
@@ -184,8 +190,90 @@ async fn serve(app: Arc<app::App>, listener: tokio::net::TcpListener) -> Result<
   Ok(())
 }
 
+/// Which platform's file conventions a build follows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+// Tests construct every variant on every host to pin the per-platform mapping,
+// so a build only ever names its own — that is not dead code.
+#[allow(dead_code)]
+enum Platform {
+  Windows,
+  MacOs,
+  Linux,
+}
+
+/// The platform this binary was built for. `cfg!` keeps this a compile-time
+/// constant while the variant itself stays constructible for the unit tests.
+fn current_platform() -> Platform {
+  if cfg!(windows) {
+    Platform::Windows
+  } else if cfg!(target_os = "macos") {
+    Platform::MacOs
+  } else {
+    Platform::Linux
+  }
+}
+
+/// The user directory that holds config.json and the data directory. Windows
+/// keeps the v0.3.x `Documents\Wish` location so existing installs keep their
+/// data; macOS uses `~/Library/Application Support/Wish`; Linux follows XDG
+/// (`$XDG_CONFIG_HOME/wish`, else `~/.config/wish`). The generated `data_dir`
+/// always points inside this directory, never beside the executable.
+fn user_dir_for(
+  platform: Platform,
+  home: Option<&OsStr>,
+  xdg_config_home: Option<&OsStr>,
+) -> Option<PathBuf> {
+  match platform {
+    Platform::Windows => Some(PathBuf::from(home?).join("Documents").join("Wish")),
+    Platform::MacOs => {
+      Some(PathBuf::from(home?).join("Library").join("Application Support").join("Wish"))
+    }
+    Platform::Linux => {
+      let base = match xdg_config_home {
+        // The XDG spec demands an absolute path; a relative value is ignored.
+        Some(dir) if is_absolute_path(dir) => PathBuf::from(dir),
+        _ => PathBuf::from(home?).join(".config"),
+      };
+      Some(base.join("wish"))
+    }
+  }
+}
+
+/// Absolute by POSIX (a leading `/`) or by the host's own rules (Windows
+/// `C:\` drive paths). `Path::is_absolute` alone is host-dependent — it
+/// rejects `/srv/cfg` on Windows — so the XDG mapping must not trust it for
+/// the POSIX form, or the same function answers differently per OS.
+fn is_absolute_path(path: &OsStr) -> bool {
+  Path::new(path).is_absolute() || path.as_encoded_bytes().starts_with(b"/")
+}
+
+/// `user_dir_for` for the running platform, reading the real environment.
+/// Windows prefers USERPROFILE (a git-bash style HOME lands somewhere else);
+/// unix builds prefer HOME.
+fn user_dir() -> Option<PathBuf> {
+  let (first, second) =
+    if cfg!(windows) { ("USERPROFILE", "HOME") } else { ("HOME", "USERPROFILE") };
+  let home = std::env::var_os(first).or_else(|| std::env::var_os(second));
+  user_dir_for(current_platform(), home.as_deref(), std::env::var_os("XDG_CONFIG_HOME").as_deref())
+}
+
+/// The config a first run writes into `dir`. `data_dir` stays inside the user
+/// directory, and a bundled niubash beside the executable is wired in when the
+/// installer left one there.
+fn default_config(dir: &Path, niubash: Option<&Path>) -> serde_json::Value {
+  let mut json = serde_json::json!({
+    "listen": "127.0.0.1:8787",
+    "data_dir": dir.join("data"),
+  });
+  if let Some(niu) = niubash {
+    json["shell"] = serde_json::json!({ "program": niu, "args": ["-c"] });
+  }
+  json
+}
+
 /// Locate a configuration for double-click launches: beside the executable first,
-/// then the user's Documents\\Wish folder, generating a default one there on first run.
+/// then the per-platform user directory, generating a default one there on first
+/// run.
 async fn auto_config() -> Result<(PathBuf, bool), Box<dyn std::error::Error>> {
   let exe = std::env::current_exe()?;
   if let Some(dir) = exe.parent() {
@@ -194,25 +282,17 @@ async fn auto_config() -> Result<(PathBuf, bool), Box<dyn std::error::Error>> {
       return Ok((beside, false));
     }
   }
-  let Some(home) = std::env::var_os("USERPROFILE") else {
-    return Err("no --config given and no user profile found".into());
+  let Some(dir) = user_dir() else {
+    return Err("no --config given and no user home directory found".into());
   };
-  let dir = PathBuf::from(home).join("Documents").join("Wish");
   let path = dir.join("config.json");
   if path.exists() {
     return Ok((path, false));
   }
   tokio::fs::create_dir_all(&dir).await?;
-  let mut json = serde_json::json!({
-    "listen": "127.0.0.1:8787",
-    "data_dir": dir.join("data"),
-  });
   // Sessions shell out through the bundled niubash when the installer placed it beside the executable.
-  if let Some(niu) = exe.parent().map(|p| p.join("niubash").join("niu.exe")) {
-    if niu.exists() {
-      json["shell"] = serde_json::json!({ "program": niu, "args": ["-c"] });
-    }
-  }
+  let niu = exe.parent().map(|p| p.join("niubash").join("niu.exe")).filter(|p| p.exists());
+  let json = default_config(&dir, niu.as_deref());
   tokio::fs::write(&path, serde_json::to_string_pretty(&json)?).await?;
   Ok((path, true))
 }
@@ -226,13 +306,25 @@ fn host_url(addr: SocketAddr) -> String {
   }
 }
 
+/// The program and arguments that open `url` in the system browser: `start`
+/// through cmd on Windows, `open` on macOS, `xdg-open` elsewhere. Pure, so the
+/// mapping is unit-tested without spawning anything.
+fn browser_command(platform: Platform, url: &str) -> (&'static str, Vec<String>) {
+  match platform {
+    Platform::Windows => {
+      ("cmd", vec!["/C".to_owned(), "start".to_owned(), String::new(), url.to_owned()])
+    }
+    Platform::MacOs => ("open", vec![url.to_owned()]),
+    Platform::Linux => ("xdg-open", vec![url.to_owned()]),
+  }
+}
+
 /// Open the system's default browser on the listening address (best effort).
+/// A failed launch still prints the URL so the interface stays reachable.
 fn open_system_browser(addr: SocketAddr) {
   let url = host_url(addr);
-  #[cfg(windows)]
-  let spawned = std::process::Command::new("cmd").args(["/C", "start", "", &url]).spawn();
-  #[cfg(not(windows))]
-  let spawned = std::process::Command::new("xdg-open").arg(&url).spawn();
+  let (program, args) = browser_command(current_platform(), &url);
+  let spawned = std::process::Command::new(program).args(&args).spawn();
   if let Err(error) = spawned {
     cli_out(&format!("wish could not open a browser ({error}); visit {url} manually\n"));
   }
@@ -289,5 +381,107 @@ async fn wait_for_signal() {
   #[cfg(not(unix))]
   {
     tokio::signal::ctrl_c().await.expect("install Ctrl-C handler");
+  }
+}
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use serde_json::json;
+
+  // The Windows location is unchanged from v0.3.x: an existing
+  // Documents\Wish config and its data must keep being found.
+  #[test]
+  fn windows_user_dir_is_documents_wish() {
+    let dir = user_dir_for(Platform::Windows, Some(OsStr::new(r"C:\Users\Ada")), None).unwrap();
+    assert_eq!(dir, PathBuf::from(r"C:\Users\Ada").join("Documents").join("Wish"));
+  }
+
+  #[test]
+  fn macos_user_dir_is_application_support() {
+    let dir = user_dir_for(Platform::MacOs, Some(OsStr::new("/Users/ada")), None).unwrap();
+    assert_eq!(
+      dir,
+      PathBuf::from("/Users/ada").join("Library").join("Application Support").join("Wish")
+    );
+  }
+
+  #[test]
+  fn linux_user_dir_prefers_absolute_xdg_config_home() {
+    let dir =
+      user_dir_for(Platform::Linux, Some(OsStr::new("/home/ada")), Some(OsStr::new("/srv/cfg")))
+        .unwrap();
+    assert_eq!(dir, PathBuf::from("/srv/cfg").join("wish"));
+  }
+
+  #[test]
+  fn linux_user_dir_ignores_relative_xdg_config_home() {
+    let dir =
+      user_dir_for(Platform::Linux, Some(OsStr::new("/home/ada")), Some(OsStr::new("wish-cfg")))
+        .unwrap();
+    assert_eq!(dir, PathBuf::from("/home/ada").join(".config").join("wish"));
+  }
+
+  #[test]
+  fn linux_user_dir_falls_back_to_home() {
+    let dir = user_dir_for(Platform::Linux, Some(OsStr::new("/home/ada")), None).unwrap();
+    assert_eq!(dir, PathBuf::from("/home/ada").join(".config").join("wish"));
+  }
+
+  // Without a home there is nowhere to put user data — and a first run must
+  // fail loudly instead of writing beside the executable.
+  #[test]
+  fn user_dir_needs_a_home_except_for_absolute_xdg() {
+    assert!(user_dir_for(Platform::Windows, None, None).is_none());
+    assert!(user_dir_for(Platform::MacOs, None, None).is_none());
+    assert!(user_dir_for(Platform::Linux, None, None).is_none());
+    assert!(user_dir_for(Platform::Linux, None, Some(OsStr::new("/srv/cfg"))).is_some());
+  }
+
+  // data_dir is derived from the user directory, so sessions, attachments and
+  // the window profile never land in the install directory.
+  #[test]
+  fn default_config_keeps_data_inside_the_user_dir() {
+    let dir = PathBuf::from("/Users/ada/Library/Application Support/Wish");
+    let config = default_config(&dir, None);
+    assert_eq!(config["data_dir"], json!(dir.join("data")));
+    assert_eq!(config["listen"], json!("127.0.0.1:8787"));
+    assert!(
+      config.get("shell").is_none(),
+      "no niubash beside the executable means no shell override"
+    );
+  }
+
+  #[test]
+  fn default_config_wires_the_bundled_niubash() {
+    let dir = PathBuf::from(r"C:\Users\Ada\Documents\Wish");
+    let niu = PathBuf::from(r"C:\Program Files\Wish\niubash\niu.exe");
+    let config = default_config(&dir, Some(&niu));
+    assert_eq!(config["shell"]["program"], json!(niu));
+    assert_eq!(config["shell"]["args"], json!(["-c"]));
+  }
+
+  // Each platform gets its own launcher; macOS must not fall through to
+  // xdg-open, which does not exist there.
+  #[test]
+  fn browser_command_matches_the_platform() {
+    let url = "http://127.0.0.1:8787";
+    assert_eq!(
+      browser_command(Platform::Windows, url),
+      ("cmd", vec!["/C".to_owned(), "start".to_owned(), String::new(), url.to_owned()])
+    );
+    assert_eq!(browser_command(Platform::MacOs, url), ("open", vec![url.to_owned()]));
+    assert_eq!(browser_command(Platform::Linux, url), ("xdg-open", vec![url.to_owned()]));
+  }
+
+  #[test]
+  fn current_platform_matches_the_build() {
+    let platform = current_platform();
+    if cfg!(windows) {
+      assert_eq!(platform, Platform::Windows);
+    } else if cfg!(target_os = "macos") {
+      assert_eq!(platform, Platform::MacOs);
+    } else {
+      assert_eq!(platform, Platform::Linux);
+    }
   }
 }

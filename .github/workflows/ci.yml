@@ -38,3 +38,25 @@ jobs:
           cd wish-web
           pnpm install --frozen-lockfile
           pnpm run typecheck
+
+  macos-check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: wish-macos-ci-${{ hashFiles('**/Cargo.lock') }}
+
+      # Minimal macOS guard: compiles and runs the same unit tests as Windows,
+      # which covers the per-platform user dir and browser command mapping.
+      - name: cargo test
+        run: cargo test --bins
