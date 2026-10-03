@@ -94,6 +94,9 @@ pub struct SessionSlot {
   live: Mutex<live::LivePreview>,
   pub status: Mutex<Value>,
   pub control: Mutex<Option<ExecutionControl>>,
+  /// Ask-mode approvals awaiting a user decision, with a redacted summary.
+  /// Carried in the status snapshot so a UI refresh cannot lose a pending card.
+  pending_approvals: Mutex<Vec<Value>>,
 }
 impl SessionSlot {
   pub async fn open(
@@ -188,8 +191,12 @@ impl SessionSlot {
     let calls = session.get_model_calls();
     let mut stats_memo = StatsMemo::default();
     let permission = Mutex::new(session.get_config().permission);
-    let status =
-      Mutex::new(snapshot(&session, session.get_config().permission, stats_value(&entries, &calls, &mut stats_memo)));
+    let mut status_value =
+      snapshot(&session, session.get_config().permission, stats_value(&entries, &calls, &mut stats_memo));
+    // A reopen (service restart) never inherits pending approvals: their waiters
+    // died with the old process, so no card is actionable any more.
+    status_value["pending_approvals"] = json!(Vec::<Value>::new());
+    let status = Mutex::new(status_value);
     let (events, _) = broadcast::channel(256);
     Ok(Arc::new(Self {
       descriptor: RwLock::new(descriptor),
@@ -217,6 +224,7 @@ impl SessionSlot {
       live: Mutex::new(live::LivePreview::default()),
       status,
       control: Mutex::new(None),
+      pending_approvals: Mutex::new(Vec::new()),
     }))
   }
   pub fn configure_tools(&self, mut config: SessionConfig) -> Result<SessionConfig, ApiError> {
@@ -342,8 +350,23 @@ impl SessionSlot {
   pub fn update_snapshot(&self, session: &Session) {
     *self.queue.lock().unwrap() = session.get_message_queue();
     // A full config write (PUT /config) may carry a different mode: stay aligned.
-    *self.permission.lock().unwrap() = session.get_config().permission;
+    let next = session.get_config().permission;
+    if let Ok(mut current) = self.permission.try_lock() {
+      if *current != next && next != PermissionMode::Ask {
+        // Leaving ask voids whatever is pending: the waiting call is aborted,
+        // never silently executed without an explicit decision.
+        self.cancel_pending_approvals();
+      }
+      *current = next;
+    }
     *self.status.lock().unwrap() = self.refresh_status(session);
+  }
+  /// Drops every pending approval of this session so the blocked executors
+  /// observe a cancelled decision.
+  fn cancel_pending_approvals(&self) {
+    if let Some(app) = self.app.upgrade() {
+      app.cancel_approvals(&self.get_descriptor().id, None);
+    }
   }
   /// The mode tool execution gates by; it may change while a run is active.
   pub fn permission(&self) -> PermissionMode {
@@ -353,7 +376,11 @@ impl SessionSlot {
   /// holds the session; a mid-run change persists once the run releases it.
   pub fn set_permission(&self, mode: PermissionMode) -> Result<(), ApiError> {
     self.require_live()?;
+    let previous = *self.permission.lock().unwrap();
     *self.permission.lock().unwrap() = mode;
+    if previous != mode && mode != PermissionMode::Ask {
+      self.cancel_pending_approvals();
+    }
     match self.session.clone().try_lock_owned() {
       Ok(mut session) => {
         session.set_permission(mode)?;
@@ -370,11 +397,76 @@ impl SessionSlot {
   /// Rebuilds the status with fresh stats folds; the memo keeps each read cheap.
   fn refresh_status(&self, session: &Session) -> Value {
     let mut memo = self.stats.lock().unwrap();
-    snapshot(session, self.permission(), stats_value(&self.entries, &self.calls, &mut memo))
+    let mut status =
+      snapshot(session, self.permission(), stats_value(&self.entries, &self.calls, &mut memo));
+    // Survives the rebuild: a pending approval must stay visible across refreshes.
+    status["pending_approvals"] = json!(self.list_pending_approvals());
+    status
+  }
+  /// The ask-mode approvals currently waiting on a user decision.
+  pub fn list_pending_approvals(&self) -> Vec<Value> {
+    self.pending_approvals.lock().unwrap().clone()
+  }
+  /// Publishes a pending approval so it survives a UI refresh, an SSE
+  /// reconnect and the live-preview snapshot. Idempotent per call id:
+  /// re-noting the same call replaces its entry.
+  pub fn note_pending_approval(
+    &self,
+    call_id: &str,
+    name: &str,
+    summary: &str,
+    generation: u64,
+  ) {
+    {
+      let mut live = self.live.lock().unwrap();
+      live.note_approval(call_id, name, summary, generation);
+    }
+    self.pending_approvals.lock().unwrap().retain(|entry| {
+      entry["call_id"].as_str() != Some(call_id) || entry["generation"].as_u64() != Some(generation)
+    });
+    self.pending_approvals.lock().unwrap().push(json!({
+      "call_id": call_id,
+      "name": name,
+      "generation": generation,
+      "summary": summary,
+    }));
+    self.publish_pending_approvals();
+  }
+  /// Removes it once answered, cancelled, timed out or superseded, and tells
+  /// live clients so their card disappears without another poll.
+  pub fn clear_pending_approval(&self, call_id: &str, generation: u64) {
+    let removed = {
+      let mut pending = self.pending_approvals.lock().unwrap();
+      let before = pending.len();
+      pending.retain(|entry| {
+        entry["call_id"].as_str() != Some(call_id) || entry["generation"].as_u64() != Some(generation)
+      });
+      before != pending.len()
+    };
+    {
+      let mut live = self.live.lock().unwrap();
+      live.retire_approval(call_id, generation);
+    }
+    self.publish_pending_approvals();
+    if removed {
+      let _ = self.events.send(json!({"type":"approval_closed","call_id":call_id,"generation":generation}));
+    }
+  }
+  fn publish_pending_approvals(&self) {
+    let pending = self.list_pending_approvals();
+    // try_lock: never block on the status mutex just to keep a card visible.
+    if let Ok(mut status) = self.status.try_lock() {
+      status["pending_approvals"] = json!(pending);
+    }
   }
   pub fn interrupt(&self) -> bool {
     self.auto_run_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    if let Some(control) = self.control.lock().unwrap().as_ref() {
+    let control = self.control.lock().unwrap().as_ref().cloned();
+    // The bumped generation voids every approval that asked under the old
+    // one: drop their senders so the blocked executors wake up cancelled
+    // instead of waiting for a decision that can no longer grant anything.
+    self.cancel_pending_approvals();
+    if let Some(control) = control {
       control.cancel();
       true
     } else {

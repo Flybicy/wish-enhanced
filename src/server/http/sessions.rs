@@ -179,13 +179,42 @@ pub async fn resolve_approval(
   Json(decision): Json<ApprovalDecision>,
 ) -> Result<Json<Value>, ApiError> {
   app.require_open()?;
-  app.get_session(&id).await?;
-  let sender = app.approvals.lock().unwrap().remove(&(id, call_id));
+  let slot = app.get_session(&id).await?;
+  // A decision only lands on the generation that asked: an interrupt bumps the
+  // generation and cancels the wait, so a late answer is stale, not a grant.
+  let generation = slot.auto_run_generation.load(std::sync::atomic::Ordering::SeqCst);
+  let sender = {
+    let mut approvals = app.approvals.lock().unwrap();
+    let current = approvals
+      .keys()
+      .find(|key| key.session_id == id && key.call_id == call_id && key.generation == generation)
+      .cloned();
+    if let Some(key) = current {
+      // Take the sender out before sending: a duplicate request that races
+      // this one finds nothing and reports the approval as already settled.
+      approvals.remove(&key)
+    } else if approvals.keys().any(|key| key.session_id == id && key.call_id == call_id) {
+      return Err(ApiError::conflict(
+        "approval belongs to an interrupted generation; ask again",
+      ));
+    } else {
+      return Err(ApiError::not_found());
+    }
+  };
   let Some(sender) = sender else {
     return Err(ApiError::not_found());
   };
-  let _ = sender.send(decision.approve);
-  Ok(Json(json!({"status":"resolved"})))
+  if sender.send(decision.approve).is_err() {
+    // The waiter is gone (cancelled or timed out): clear the entry so the
+    // card cannot outlive the run it belonged to, and say so.
+    slot.clear_pending_approval(&call_id, generation);
+    return Err(ApiError::conflict(
+      "approval is no longer waiting; the call was already cancelled",
+    ));
+  }
+  slot.clear_pending_approval(&call_id, generation);
+  Ok(Json(json!({"status": if decision.approve {"approved"} else {"denied"},
+    "call_id": call_id, "generation": generation})))
 }
 
 /// Body: `{"program", "args"}` for the session's own shell, or null to follow the application's.
@@ -280,6 +309,9 @@ pub async fn interrupt(
 ) -> Result<Json<Value>, ApiError> {
   let slot = app.get_session(&id).await?;
   let mut requested = slot.interrupt();
+  // Pending approvals die with the run they belong to: the executor must not
+  // keep waiting for a decision that a bumped generation already invalidated.
+  app.cancel_approvals(&id, None);
   if !requested {
     if let Ok(mut session) = slot.session.try_lock() {
       if !session.get_state().is_stable() {

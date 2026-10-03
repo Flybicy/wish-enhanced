@@ -19,7 +19,14 @@ export interface ShellSettings { program: string; args: string[] | null }
 // How side-effect tools may run; the server refuses them in read_only, and asks first in ask.
 export type PermissionMode = 'operate' | 'ask' | 'read_only';
 // The frame the session's event stream sends while a tool call awaits the user's decision.
-export interface ApprovalFrame { type: 'approval_required'; call_id: string; name: string; summary: string }
+// `generation` ties the request to the run that asked: an interrupt bumps it and
+// voids every approval of the older generation.
+export interface ApprovalFrame { type: 'approval_required'; call_id: string; name: string; summary: string; generation?: number }
+// Sent once a pending approval was answered, cancelled or timed out; the card
+// disappears without waiting for the next poll.
+export interface ApprovalClosedFrame { type: 'approval_closed'; call_id: string; generation?: number }
+// One pending approval as the session status snapshot reports it.
+export interface PendingApprovalEntry { call_id: string; name: string; summary: string; generation?: number }
 export interface BlobInfo { id: string; mime_type: string; byte_count: number }
 export interface UploadedBlob extends BlobInfo { sha256: string }
 export interface EffectiveConfig { defaults: { provider: string; model: string; reasoning?: { effort?: string }; instructions: string; cwd: string; shell: boolean } }

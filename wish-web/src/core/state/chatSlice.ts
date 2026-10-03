@@ -18,7 +18,7 @@ export interface CapabilitiesOk { status: 'ok'; data: SessionCapabilities }
 export interface CapabilitiesErr { status: 'error'; error: unknown }
 export type ChatCapabilities = CapabilitiesOk | CapabilitiesErr;
 // A side-effect tool call waiting for the user's decision in ask mode.
-export interface PendingApproval { callId: string; name: string; summary: string }
+export interface PendingApproval { callId: string; name: string; summary: string; generation?: number }
 
 export const chat = (() => {
   const sessionId = shallowRef<string | null>(null);
@@ -34,9 +34,43 @@ export const chat = (() => {
   // The approval-required frame sets this; the card clears it on decision, new
   // input, run end, and close. Restored on failure so the user can retry.
   const pendingApproval = shallowRef<PendingApproval | null>(null);
+  // Call id whose decision is in flight: a poll that races the request must
+  // not resurrect a card the user already answered.
+  let settlingApproval: string | null = null;
 
   const isActive = computed(() => sessionId.value !== null);
   const phase = computed(() => snapshot.value?.phase ?? 'idle');
+
+  // Reads the pending-approval list a frame carries: the status snapshot is
+  // authoritative, and the live preview is the fallback.
+  function approvalsOf(frame: any): any[] {
+    const status = frame?.data?.status?.pending_approvals;
+    if (Array.isArray(status)) return status;
+    const live = Array.isArray(frame?.live_events) ? frame.live_events : [];
+    return live
+      .map((event: any) => event?.ApprovalRequired)
+      .filter((entry: any) => entry && entry.call_id != null);
+  }
+  // Reconciles the card with what the server reports as waiting. The list
+  // outranks the card: an approval that is answered, cancelled, timed out or
+  // superseded leaves the list, and the card follows. A listed entry that the
+  // user is still deciding is not restored over an in-flight answer, and only
+  // a running run can still be answered.
+  function syncPendingApproval(list: unknown, running: boolean) {
+    const entries: any[] = Array.isArray(list) ? list : [];
+    const waiting = entries.find((entry) => entry && entry.call_id != null);
+    if (waiting && running) {
+      if (String(waiting.call_id) === settlingApproval) return;
+      pendingApproval.value = {
+        callId: String(waiting.call_id),
+        name: String(waiting.name ?? ''),
+        summary: String(waiting.summary ?? ''),
+        generation: waiting.generation,
+      };
+    } else if (pendingApproval.value) {
+      pendingApproval.value = null;
+    }
+  }
 
   let epoch = 0;
   let controller: AbortController | null = null;
@@ -177,7 +211,20 @@ export const chat = (() => {
             callId: String(frame.call_id),
             name: String(frame.name ?? ''),
             summary: String(frame.summary ?? ''),
+            generation: frame.generation,
           };
+          return;
+        }
+        if (frame && frame.type === 'approval_closed') {
+          const currentCard = pendingApproval.value;
+          if (!currentCard || frame.call_id == null || String(frame.call_id) === currentCard.callId) {
+            pendingApproval.value = null;
+            if (currentCard && settlingApproval === currentCard.callId) settlingApproval = null;
+          }
+          return;
+        }
+        if (frame && frame.type === 'snapshot') {
+          syncPendingApproval(approvalsOf(frame), !!frame.data?.status?.running);
           return;
         }
         if (frame && (frame.type === 'operation_finished' || frame.type === 'operation_failed')) {
@@ -213,6 +260,7 @@ export const chat = (() => {
       if (!current(own)) return;
 
       snapshot.value = snap;
+      syncPendingApproval(snap.status?.pending_approvals, snap.running);
       entries.value = page.items.slice().reverse();
       bounds();
       hasMoreBefore.value = page.has_more;
@@ -252,7 +300,7 @@ export const chat = (() => {
       const snap = await getSession(id, own);
       if (!current(own)) return;
       snapshot.value = snap;
-      if (!snap.running) pendingApproval.value = null;
+      syncPendingApproval(snap.status?.pending_approvals, snap.running);
 
       const result = history.viewingPast() ? { ok: false, drained: false } : await fetchNewer();
       if (!current(own)) return;
@@ -295,18 +343,30 @@ export const chat = (() => {
   }
 
   // Answer a side-effect tool call waiting in ask mode. The card clears
-  // optimistically and comes back when the request fails.
+  // optimistically and comes back when the request fails — except for the
+  // rejections that mean the approval is already settled: 404 nothing waits
+  // here, 409 an interrupted generation must be asked again, 410 the session
+  // is gone. A transport or server error leaves it answerable.
   async function resolveApproval(approve: boolean): Promise<void> {
     const id = sessionId.value;
     const pending = pendingApproval.value;
     if (!id || !pending) return;
     pendingApproval.value = null;
+    settlingApproval = pending.callId;
     const own = epoch;
     try {
       await api.sessionApproveTool(id, pending.callId, approve, options());
-    } catch (cause) {
-      if (current(own) && pendingApproval.value == null) pendingApproval.value = pending;
+    } catch (cause: any) {
+      if (
+        current(own) &&
+        pendingApproval.value == null &&
+        ![404, 409, 410].includes(cause?.status)
+      ) {
+        pendingApproval.value = pending;
+      }
       throw cause;
+    } finally {
+      if (current(own) && settlingApproval === pending.callId) settlingApproval = null;
     }
   }
 
@@ -368,6 +428,8 @@ export const chat = (() => {
     moveQueued,
     interrupt,
     resolveApproval,
+    approvalsOf,
+    syncPendingApproval,
     getDraft,
     setDraft,
     cancelLocate,
