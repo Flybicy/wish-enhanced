@@ -50,6 +50,10 @@ pub struct Descriptor {
   /// A provider and config chosen while an operation ran, applied at its next boundary.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub pending_selection: Option<selection::PendingSelection>,
+  /// The session that made this one with `wish session create`, which may configure and delete
+  /// it; absent for one the user made.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub created_by: Option<String>,
   pub name: String,
   pub updated_at: u64,
   /// Advanced by every edit through `edit_descriptor`, which an `If-Match` header names.
@@ -67,6 +71,9 @@ pub struct Descriptor {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateSession {
+  /// The session making this one through `wish session`, which may then configure and delete it.
+  #[serde(skip)]
+  pub created_by: Option<String>,
   #[serde(default)]
   pub initial_messages: Vec<Message>,
   /// Where each initial message came from, when it came from another session (a fork); missing
@@ -84,6 +91,9 @@ pub struct CreateSession {
   pub tools: ToolChanges,
   #[serde(default)]
   pub metadata: Value,
+  /// The folder the session goes in; none for the root of the list.
+  #[serde(default)]
+  pub folder: Option<String>,
 }
 
 pub struct SessionSlot {
@@ -108,7 +118,7 @@ pub struct SessionSlot {
   image_dir: PathBuf,
   /// What this session's shell shows the MCP bridge; made anew each time the session opens, since
   /// its shells do not outlive the process.
-  pub mcp_token: String,
+  pub bridge_token: String,
   tasks: tokio_util::task::TaskTracker,
   app: Weak<App>,
   /// This session's live events, for `GET /sessions/{id}/events`.
@@ -135,9 +145,10 @@ impl SessionSlot {
       Arc::new(RwLock::new(own.unwrap_or_else(|| app.shell.read().unwrap().clone())));
     let mut shell_config = ShellConfig::new(&descriptor.cwd, app.data_dir.shell(&descriptor.id));
     shell_config.command = Arc::clone(&effective_shell);
-    let mcp_token = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
-    // Set whether or not MCP is on: the bridge checks the switch, and the environment stays as it is.
-    shell_config.env.extend(app.mcp.bridge.shell_environment(&descriptor.id, &mcp_token));
+    let bridge_token =
+      format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
+    // Set whatever the switches say: the bridge checks them, and the environment stays as it is.
+    shell_config.env.extend(app.bridge.shell_environment(&descriptor.id, &bridge_token));
     let image_dir =
       std::path::absolute(app.data_dir.blobs(&descriptor.id)).map_err(ApiError::internal)?;
     let switches = descriptor.tools;
@@ -156,7 +167,7 @@ impl SessionSlot {
       update_lock: Arc::new(AsyncMutex::new(())),
       effective_shell,
       image_dir,
-      mcp_token,
+      bridge_token,
       tasks: app.lifecycle.tasks.clone(),
       app: Arc::downgrade(app),
       events,
