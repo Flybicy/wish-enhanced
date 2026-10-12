@@ -1,10 +1,13 @@
-use crate::server::error::ApiError;
-use crate::server::provider::ProviderConfig;
+//! The configuration file's schema, and the checks a configuration passes at startup and on every
+//! save before anything is built from it.
+use crate::server::{
+  error::ApiError, mcp::McpConfig, provider::ProviderConfig, search::SearchConfig,
+  session::ToolSwitches,
+};
 use crate::session::{CompactionConfig, SessionConfig};
 use crate::tool::shell::{self, ShellCommand};
 use crate::transport::Proxy;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 use std::{collections::BTreeMap, net::SocketAddr, path::PathBuf};
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -13,10 +16,31 @@ pub struct Config {
   pub listen: SocketAddr,
   pub data_dir: PathBuf,
   pub bearer_token_env: Option<String>,
+  /// The built web app to hand out beside the API; `web` beside the program when absent.
+  /// Read at startup.
+  pub web_dir: Option<PathBuf>,
+  /// `host[:port]` names, besides loopback and the listen address, that browsers may reach a
+  /// server without a token by: a LAN address or a domain. Read at startup.
+  pub allowed_hosts: Vec<String>,
   pub providers: BTreeMap<String, ProviderConfig>,
   pub proxy: ProxyConfig,
   pub shell: ShellSettings,
+  pub mcp: McpConfig,
+  /// The services `web_search` asks, and in what order.
+  pub search: SearchConfig,
   pub defaults: Defaults,
+}
+impl Config {
+  /// Refuses a proxy, MCP server or search provider that could never work.
+  pub fn validate(&self) -> Result<(), ApiError> {
+    self.proxy.validate()?;
+    self.mcp.validate(&self.providers)?;
+    self.search.validate(&self.providers)
+  }
+}
+/// The default of a switch that is on unless the file says otherwise.
+pub(super) fn yes() -> bool {
+  true
 }
 
 /// The shell every session's commands run under. Applied to the next command after a save.
@@ -128,7 +152,8 @@ pub struct Defaults {
   pub provider: String,
   pub model: String,
   pub cwd: PathBuf,
-  pub shell: bool,
+  /// The tools new sessions start with.
+  pub tools: ToolSwitches,
   pub stream: bool,
   pub instructions: String,
   pub reasoning: Option<crate::protocol::ReasoningConfig>,
@@ -141,7 +166,7 @@ impl Default for Defaults {
       provider: String::new(),
       model: String::new(),
       cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/tmp")),
-      shell: true,
+      tools: ToolSwitches { shell: true, ask_user: true, mcp: true, web_search: true },
       stream: true,
       instructions: String::new(),
       reasoning: None,
@@ -166,85 +191,14 @@ impl Default for Config {
       listen: "127.0.0.1:9780".parse().unwrap(),
       data_dir: PathBuf::from("data"),
       bearer_token_env: None,
+      web_dir: None,
+      allowed_hosts: Vec::new(),
       providers: BTreeMap::new(),
       proxy: ProxyConfig::default(),
       shell: ShellSettings::default(),
+      mcp: Default::default(),
+      search: Default::default(),
       defaults: Defaults::default(),
     }
   }
-}
-pub fn read_secret(name: &str) -> Result<String, String> {
-  let value = std::env::var(name).map_err(|_| format!("environment variable {name} is missing"))?;
-  if value.is_empty() {
-    return Err(format!("environment variable {name} is empty"));
-  }
-  Ok(value)
-}
-
-/// The shell used when none is configured and the shells installed on this machine, each with
-/// the arguments it would run with, for choosing one.
-pub fn shell_catalog() -> Value {
-  let describe = |command: ShellCommand| {
-    json!({
-      "name": command.program.file_stem().map(|name| name.to_string_lossy().into_owned()),
-      "program": command.program,
-      "args": command.args,
-    })
-  };
-  json!({
-    "default": describe(ShellCommand::platform_default()),
-    "installed": ShellCommand::installed().into_iter().map(describe).collect::<Vec<_>>(),
-  })
-}
-
-/// The proxy variables visible to this server process, with URL details that may carry secrets removed.
-pub fn proxy_environment() -> Value {
-  const NAMES: &[&str] = &[
-    "HTTPS_PROXY",
-    "https_proxy",
-    "HTTP_PROXY",
-    "http_proxy",
-    "ALL_PROXY",
-    "all_proxy",
-    "NO_PROXY",
-    "no_proxy",
-  ];
-  let variables: Vec<Value> = NAMES
-    .iter()
-    .filter_map(|name| {
-      let raw = std::env::var_os(name)?;
-      let value = raw.to_string_lossy();
-      let (displayed, redacted) = if name.eq_ignore_ascii_case("no_proxy") {
-        (value.into_owned(), false)
-      } else {
-        display_proxy_address(&value)
-      };
-      Some(json!({"name": name, "value": displayed, "redacted": redacted}))
-    })
-    .collect();
-  json!({"variables": variables})
-}
-
-fn display_proxy_address(raw: &str) -> (String, bool) {
-  let parsed = reqwest::Url::parse(raw)
-    .ok()
-    .filter(|url| url.host_str().is_some())
-    .or_else(|| reqwest::Url::parse(&format!("http://{raw}")).ok());
-  let Some(mut url) = parsed else {
-    return ("—".to_owned(), true);
-  };
-  if url.host_str().is_none() {
-    return ("—".to_owned(), true);
-  }
-  let hidden = !url.username().is_empty()
-    || url.password().is_some()
-    || url.path() != "/"
-    || url.query().is_some()
-    || url.fragment().is_some();
-  let _ = url.set_username("");
-  let _ = url.set_password(None);
-  url.set_path("/");
-  url.set_query(None);
-  url.set_fragment(None);
-  (url.to_string(), hidden)
 }

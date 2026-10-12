@@ -16,6 +16,7 @@
       "variants": {
         "deepseek_chat": {
           "preset": "deepseek",
+          "account_state": "deepseek_user_balance",
           "enabled": true,
           "protocol": "deepseek_chat",
           "base_url": "https://api.deepseek.com",
@@ -32,6 +33,7 @@
         },
         "plaintext_responses": {
           "preset": "deepseek",
+          "account_state": "deepseek_user_balance",
           "enabled": true,
           "protocol": "plaintext_responses",
           "base_url": "https://api.deepseek.com",
@@ -48,6 +50,7 @@
         },
         "deepseek_messages": {
           "preset": "deepseek",
+          "account_state": "deepseek_user_balance",
           "enabled": true,
           "protocol": "deepseek_messages",
           "base_url": "https://api.deepseek.com/anthropic",
@@ -397,6 +400,7 @@
       "variants": {
         "zai_chat": {
           "preset": "zai_coding_global",
+          "account_state": "zai_coding_plan_monitor",
           "enabled": true,
           "protocol": "zai_chat",
           "base_url": "https://api.z.ai/api/coding/paas/v4",
@@ -413,6 +417,7 @@
         },
         "zai_messages": {
           "preset": "zai_coding_global",
+          "account_state": "zai_coding_plan_monitor",
           "enabled": true,
           "protocol": "zai_messages",
           "base_url": "https://api.z.ai/api/anthropic",
@@ -497,6 +502,8 @@
       "variants": {
         "zai_chat": {
           "preset": "zhipu_coding_cn",
+          "account_state": "zai_coding_plan_monitor",
+          "account_state_base_url": "https://open.bigmodel.cn",
           "enabled": true,
           "protocol": "zai_chat",
           "base_url": "https://open.bigmodel.cn/api/coding/paas/v4",
@@ -513,6 +520,8 @@
         },
         "zai_messages": {
           "preset": "zhipu_coding_cn",
+          "account_state": "zai_coding_plan_monitor",
+          "account_state_base_url": "https://open.bigmodel.cn",
           "enabled": true,
           "protocol": "zai_messages",
           "base_url": "https://open.bigmodel.cn/api/anthropic",
@@ -529,6 +538,8 @@
         },
         "plaintext_responses": {
           "preset": "zhipu_coding_cn",
+          "account_state": "zai_coding_plan_monitor",
+          "account_state_base_url": "https://open.bigmodel.cn",
           "enabled": true,
           "protocol": "plaintext_responses",
           "base_url": "https://open.bigmodel.cn/api/v1",
@@ -561,10 +572,11 @@
       "reasoning_efforts": {},
       "max_output_tokens": null,
       "variants": {
-        "openai_chat": {
+        "compatible_chat": {
           "preset": "siliconflow_cn",
+          "account_state": "siliconflow_balance",
           "enabled": true,
-          "protocol": "openai_chat",
+          "protocol": "compatible_chat",
           "base_url": "https://api.siliconflow.cn/v1",
           "path": "/chat/completions",
           "auth": "bearer",
@@ -580,7 +592,7 @@
       },
       "unsupported_protocols": [],
       "protocols": [
-        "openai_chat"
+        "compatible_chat"
       ]
     },
     {
@@ -593,10 +605,12 @@
       "reasoning_efforts": {},
       "max_output_tokens": null,
       "variants": {
-        "openai_chat": {
+        "compatible_chat": {
           "preset": "siliconflow_global",
+          "account_state": "siliconflow_balance",
+          "account_state_base_url": "https://api.siliconflow.com",
           "enabled": true,
-          "protocol": "openai_chat",
+          "protocol": "compatible_chat",
           "base_url": "https://api.siliconflow.com/v1",
           "path": "/chat/completions",
           "auth": "bearer",
@@ -612,7 +626,7 @@
       },
       "unsupported_protocols": [],
       "protocols": [
-        "openai_chat"
+        "compatible_chat"
       ]
     },
     {
@@ -825,6 +839,7 @@
       "variants": {
         "qwen_chat": {
           "preset": "qwen_workspace_cn",
+          "account_state": "qwen_workspace_quota",
           "enabled": true,
           "protocol": "qwen_chat",
           "base_url": "https://{workspace_id}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
@@ -841,6 +856,7 @@
         },
         "plaintext_responses": {
           "preset": "qwen_workspace_cn",
+          "account_state": "qwen_workspace_quota",
           "enabled": true,
           "protocol": "plaintext_responses",
           "base_url": "https://{workspace_id}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
@@ -1191,6 +1207,7 @@
       "variants": {
         "kimi_k2_chat": {
           "preset": "kimi_cn",
+          "account_state": "kimi_open_balance",
           "enabled": true,
           "protocol": "kimi_k2_chat",
           "base_url": "https://api.moonshot.cn/v1",
@@ -1225,6 +1242,8 @@
       "variants": {
         "kimi_k2_chat": {
           "preset": "kimi_global",
+          "account_state": "kimi_open_balance",
+          "account_state_base_url": "https://api.moonshot.ai",
           "enabled": true,
           "protocol": "kimi_k2_chat",
           "base_url": "https://api.moonshot.ai/v1",
@@ -1259,6 +1278,7 @@
       "variants": {
         "kimi_k2_chat": {
           "preset": "kimi_code",
+          "account_state": "kimi_code_companion_usage",
           "enabled": true,
           "protocol": "kimi_k2_chat",
           "base_url": "https://api.kimi.com/coding/v1",
@@ -1480,6 +1500,7 @@
       "variants": {
         "codex_responses": {
           "preset": "openai_codex",
+          "account_state": "openai_codex_usage",
           "enabled": true,
           "protocol": "codex_responses",
           "base_url": "https://chatgpt.com/backend-api/codex",
@@ -1566,10 +1587,10 @@
           "token_count": "google_generate_content",
           "proxy_enabled": true
         },
-        "openai_chat": {
+        "compatible_chat": {
           "preset": "google_gemini",
           "enabled": true,
-          "protocol": "openai_chat",
+          "protocol": "compatible_chat",
           "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
           "path": "/chat/completions",
           "auth": "bearer",
@@ -1586,7 +1607,7 @@
       "unsupported_protocols": [],
       "protocols": [
         "google_generate_content",
-        "openai_chat"
+        "compatible_chat"
       ]
     },
     {
@@ -1639,6 +1660,7 @@
       "variants": {
         "minimax_chat": {
           "preset": "minimax_cn",
+          "account_state": "minimax_account_balance",
           "enabled": true,
           "protocol": "minimax_chat",
           "base_url": "https://api.minimaxi.com/v1",
@@ -1655,6 +1677,7 @@
         },
         "minimax_messages": {
           "preset": "minimax_cn",
+          "account_state": "minimax_account_balance",
           "enabled": true,
           "protocol": "minimax_messages",
           "base_url": "https://api.minimaxi.com/anthropic",
@@ -1688,6 +1711,8 @@
       "variants": {
         "minimax_chat": {
           "preset": "minimax_global",
+          "account_state": "minimax_account_balance",
+          "account_state_base_url": "https://api.minimax.io",
           "enabled": true,
           "protocol": "minimax_chat",
           "base_url": "https://api.minimax.io/v1",
@@ -1704,6 +1729,8 @@
         },
         "minimax_messages": {
           "preset": "minimax_global",
+          "account_state": "minimax_account_balance",
+          "account_state_base_url": "https://api.minimax.io",
           "enabled": true,
           "protocol": "minimax_messages",
           "base_url": "https://api.minimax.io/anthropic",
@@ -1737,6 +1764,7 @@
       "variants": {
         "minimax_chat": {
           "preset": "minimax_token_cn",
+          "account_state": "minimax_token_plan_remains",
           "enabled": true,
           "protocol": "minimax_chat",
           "base_url": "https://api.minimaxi.com/v1",
@@ -1753,6 +1781,7 @@
         },
         "minimax_messages": {
           "preset": "minimax_token_cn",
+          "account_state": "minimax_token_plan_remains",
           "enabled": true,
           "protocol": "minimax_messages",
           "base_url": "https://api.minimaxi.com/anthropic",
@@ -1786,6 +1815,8 @@
       "variants": {
         "minimax_chat": {
           "preset": "minimax_token_global",
+          "account_state": "minimax_token_plan_remains",
+          "account_state_base_url": "https://api.minimax.io",
           "enabled": true,
           "protocol": "minimax_chat",
           "base_url": "https://api.minimax.io/v1",
@@ -1802,6 +1833,8 @@
         },
         "minimax_messages": {
           "preset": "minimax_token_global",
+          "account_state": "minimax_token_plan_remains",
+          "account_state_base_url": "https://api.minimax.io",
           "enabled": true,
           "protocol": "minimax_messages",
           "base_url": "https://api.minimax.io/anthropic",
@@ -1833,10 +1866,11 @@
       "reasoning_efforts": {},
       "max_output_tokens": null,
       "variants": {
-        "openai_chat": {
+        "compatible_chat": {
           "preset": "openrouter",
+          "account_state": "openrouter_key_quota",
           "enabled": true,
-          "protocol": "openai_chat",
+          "protocol": "compatible_chat",
           "base_url": "https://openrouter.ai/api/v1",
           "path": "/chat/completions",
           "auth": "bearer",
@@ -1851,6 +1885,7 @@
         },
         "openai_responses": {
           "preset": "openrouter",
+          "account_state": "openrouter_key_quota",
           "enabled": true,
           "protocol": "openai_responses",
           "base_url": "https://openrouter.ai/api/v1",
@@ -1868,7 +1903,7 @@
       },
       "unsupported_protocols": [],
       "protocols": [
-        "openai_chat",
+        "compatible_chat",
         "openai_responses"
       ]
     },
@@ -1882,10 +1917,11 @@
       "reasoning_efforts": {},
       "max_output_tokens": null,
       "variants": {
-        "openai_chat": {
+        "compatible_chat": {
           "preset": "huggingface_router",
+          "account_state": "hf_whoami_billing",
           "enabled": true,
-          "protocol": "openai_chat",
+          "protocol": "compatible_chat",
           "base_url": "https://router.huggingface.co/v1",
           "path": "/chat/completions",
           "auth": "bearer",
@@ -1901,7 +1937,7 @@
       },
       "unsupported_protocols": [],
       "protocols": [
-        "openai_chat"
+        "compatible_chat"
       ]
     },
     {
@@ -1914,10 +1950,10 @@
       "reasoning_efforts": {},
       "max_output_tokens": 65536,
       "variants": {
-        "openai_chat": {
+        "compatible_chat": {
           "preset": "opencode_zen",
           "enabled": true,
-          "protocol": "openai_chat",
+          "protocol": "compatible_chat",
           "base_url": "https://opencode.ai/zen/v1",
           "path": "/chat/completions",
           "auth": "bearer",
@@ -1965,7 +2001,7 @@
       },
       "unsupported_protocols": [],
       "protocols": [
-        "openai_chat",
+        "compatible_chat",
         "openai_responses",
         "anthropic_messages"
       ]
@@ -1980,10 +2016,10 @@
       "reasoning_efforts": {},
       "max_output_tokens": null,
       "variants": {
-        "openai_chat": {
+        "compatible_chat": {
           "preset": "opencode_go",
           "enabled": true,
-          "protocol": "openai_chat",
+          "protocol": "compatible_chat",
           "base_url": "https://opencode.ai/zen/go/v1",
           "path": "/chat/completions",
           "auth": "bearer",
@@ -2015,7 +2051,7 @@
       },
       "unsupported_protocols": [],
       "protocols": [
-        "openai_chat",
+        "compatible_chat",
         "openai_responses"
       ]
     },
@@ -2029,10 +2065,10 @@
       "reasoning_efforts": {},
       "max_output_tokens": null,
       "variants": {
-        "openai_chat": {
+        "mistral_chat": {
           "preset": "mistral",
           "enabled": true,
-          "protocol": "openai_chat",
+          "protocol": "mistral_chat",
           "base_url": "https://api.mistral.ai/v1",
           "path": "/chat/completions",
           "auth": "bearer",
@@ -2064,7 +2100,7 @@
       },
       "unsupported_protocols": [],
       "protocols": [
-        "openai_chat",
+        "mistral_chat",
         "mistral_conversations"
       ]
     },
@@ -2078,10 +2114,10 @@
       "reasoning_efforts": {},
       "max_output_tokens": null,
       "variants": {
-        "openai_chat": {
+        "compatible_chat": {
           "preset": "xai",
           "enabled": true,
-          "protocol": "openai_chat",
+          "protocol": "compatible_chat",
           "base_url": "https://api.x.ai/v1",
           "path": "/chat/completions",
           "auth": "bearer",
@@ -2113,7 +2149,7 @@
       },
       "unsupported_protocols": [],
       "protocols": [
-        "openai_chat",
+        "compatible_chat",
         "openai_responses"
       ]
     },
@@ -2127,10 +2163,10 @@
       "reasoning_efforts": {},
       "max_output_tokens": null,
       "variants": {
-        "openai_chat": {
+        "compatible_chat": {
           "preset": "groq",
           "enabled": true,
-          "protocol": "openai_chat",
+          "protocol": "compatible_chat",
           "base_url": "https://api.groq.com/openai/v1",
           "path": "/chat/completions",
           "auth": "bearer",
@@ -2146,7 +2182,7 @@
       },
       "unsupported_protocols": [],
       "protocols": [
-        "openai_chat"
+        "compatible_chat"
       ]
     },
     {
@@ -2159,10 +2195,10 @@
       "reasoning_efforts": {},
       "max_output_tokens": null,
       "variants": {
-        "openai_chat": {
+        "compatible_chat": {
           "preset": "cerebras",
           "enabled": true,
-          "protocol": "openai_chat",
+          "protocol": "compatible_chat",
           "base_url": "https://api.cerebras.ai/v1",
           "path": "/chat/completions",
           "auth": "bearer",
@@ -2178,7 +2214,7 @@
       },
       "unsupported_protocols": [],
       "protocols": [
-        "openai_chat"
+        "compatible_chat"
       ]
     },
     {
@@ -2191,10 +2227,10 @@
       "reasoning_efforts": {},
       "max_output_tokens": null,
       "variants": {
-        "openai_chat": {
+        "compatible_chat": {
           "preset": "ollama",
           "enabled": true,
-          "protocol": "openai_chat",
+          "protocol": "compatible_chat",
           "base_url": "http://127.0.0.1:11434/v1",
           "path": "/chat/completions",
           "auth": "none",
@@ -2226,7 +2262,7 @@
       },
       "unsupported_protocols": [],
       "protocols": [
-        "openai_chat",
+        "compatible_chat",
         "openai_responses"
       ]
     },
@@ -2240,10 +2276,10 @@
       "reasoning_efforts": {},
       "max_output_tokens": null,
       "variants": {
-        "openai_chat": {
+        "compatible_chat": {
           "preset": "lm_studio",
           "enabled": true,
-          "protocol": "openai_chat",
+          "protocol": "compatible_chat",
           "base_url": "http://127.0.0.1:1234/v1",
           "path": "/chat/completions",
           "auth": "none",
@@ -2275,7 +2311,7 @@
       },
       "unsupported_protocols": [],
       "protocols": [
-        "openai_chat",
+        "compatible_chat",
         "openai_responses"
       ]
     },
@@ -2289,10 +2325,10 @@
       "reasoning_efforts": {},
       "max_output_tokens": null,
       "variants": {
-        "openai_chat": {
+        "compatible_chat": {
           "preset": "vllm",
           "enabled": true,
-          "protocol": "openai_chat",
+          "protocol": "compatible_chat",
           "base_url": "http://127.0.0.1:8000/v1",
           "path": "/chat/completions",
           "auth": "none",
@@ -2324,7 +2360,7 @@
       },
       "unsupported_protocols": [],
       "protocols": [
-        "openai_chat",
+        "compatible_chat",
         "openai_responses"
       ]
     }

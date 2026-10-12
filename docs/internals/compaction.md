@@ -16,7 +16,7 @@ automatic trigger reads `last_request_input_tokens` from the most recent `Comple
 `Conversation` call of the active generation made with the configured model. It fires when that
 value is at least `trigger_tokens`. After a model switch or a cutover nothing triggers until such
 a call completes. Missing usage is not zero. The server reports the same number as a session's
-`context_tokens` status (`src/server/session.rs`).
+`context_tokens` status (`src/server/session/status.rs`).
 
 Other reasons: `ContextRejected` after an explicit context-length rejection
 ([executor](executor.md#run)), and `Manual` from `executor::compaction::compact`, which the server
@@ -56,7 +56,7 @@ remains queued and is consumed normally by the executor. A later compaction send
 opaque body as part of the full active context.
 
 This path neither promotes nor seeds a standby generation. The standby handle stays empty; any
-previously prepared local context is cleared on successful cutover. Old generations and history
+previously prepared local context is cleared, its list deleted, on successful cutover. Old generations and history
 remain available. The compaction cursor points after the opaque body, before the retained user
 message.
 
@@ -69,29 +69,43 @@ response, account reading and warnings.
 
 ## Provider-switch handoff
 
-Server-owned: [`src/server/session/selection.rs`](../../src/server/session/selection.rs) applies a
-pending provider selection at a [run boundary](executor.md#run-boundaries), and
-`executor::compaction::translation` makes the call.
+[`src/server/session/selection.rs`](../../src/server/session/selection.rs) (server-owned) applies a
+pending provider selection at a [run boundary](executor.md#run-boundaries).
+`executor::compaction::handoff` finds the items that need a handoff, makes the call and builds the
+new context; the server says which items need one and whether the provider switched from can read
+them, both from the item metadata below, and commits the switch.
 
-When the new provider cannot replay the active context's encrypted compaction item, the old
-provider gets a streamed request. It contains every entry up to and including the item (normally
-just the fixed prefix and the item), plus a request for a self-contained handoff. Tools, tool
-choice, reasoning and prompt cache stay as the conversation calls send them, so the handoff reads
-their cached prefix; the prompt asks for no tool calls, and a reply that calls one fails the
-handoff. The output cap is 8192 tokens, except on Codex Responses, which rejects output caps. The
-reply must be 1-65 536 bytes of assistant text.
+An encrypted compaction item can be read only by the provider that made it: upstream compaction
+records that provider's id in the item's metadata (`provider`). Every other provider reads the item through
+its readable handoff, also kept in the metadata (`handoff: {content, translated}`). Before each
+call, `SessionModel` replaces an item the provider cannot read with that handoff, as a
+`Developer { fixed: false }` instruction in the item's place, which the wire then places by its
+own instruction rules ([model use](protocol/model-use.md)). The item itself stays in the context,
+so switching back to the provider that made it resumes from the encrypted history, with the same
+prompt prefix as before.
 
-A successful handoff replaces the item with a `Developer { fixed: false }` message (metadata
-`{"source":"upstream_compaction_handoff"}`) in a new active generation. All entries after the item
-keep their original order and IDs. The handoff is rendered as an instruction at the start of the
-new conversation, and can be included in a later local summary or upstream compaction. The call
-has purpose `CompactionTranslation` and is attributed to the old provider.
+A selection needs a handoff when the new provider cannot read an item that has none, or has only a
+placeholder that the current provider can now replace. The current provider, which must be able
+to read the item, then gets a streamed request. It contains every entry up to and including the
+item (normally just the fixed prefix and the item), plus a request for a self-contained handoff.
+Tools, tool choice, reasoning and prompt cache stay as the conversation calls send them, so the
+handoff reads their cached prefix; the prompt asks for no tool calls, and a reply that calls one
+fails the handoff. The output cap is 8192 tokens, except on Codex Responses, which rejects output
+caps. The reply must be 1-65 536 bytes of assistant text. Switching again later reuses the stored
+handoff without another call.
 
-If the old provider is unavailable, the context holds more than one encrypted item, or the
-handoff fails, the new generation instead holds an explicit missing-context placeholder (metadata
-source `upstream_compaction_handoff_unavailable`) in the same position. `CompactionTranslationFailed`
-records the reason, and the selected provider then continues. Cancellation leaves the old
-generation and pending selection intact.
+The handoff is attached to a copy of the item that takes the item's place in a new active
+generation. All entries around it keep their original order and IDs. Like a standby summary, the
+copy is context rather than conversation: it joins no history, so the web does not show it, and
+`CompactionTranslationCompleted` names its entry. Local compaction keeps it with the fixed prefix
+and starts summarizing after it. The call has purpose `CompactionTranslation` and is attributed to
+the old provider.
+
+If the current provider cannot read the item or is unavailable, the context holds more than one
+such item, or the handoff fails, the copy carries an explicit missing-context placeholder instead
+(`translated: false`). `CompactionTranslationFailed` records the reason, and the selected provider
+then continues. A later selection replaces the placeholder once a provider that can read the item
+is current again. Cancellation leaves the old generation and pending selection intact.
 
 ## Local compaction
 
@@ -106,7 +120,7 @@ completed conversation request -> actual input usage
        | below trigger                      | at trigger / context rejection / manual
        v                                    v
  plan one closed old span             Compacting: summarize every remaining
- (awaited)                            eligible span, one by one
+ (awaited)                            eligible span at once, commit in order
        |                                    |
  summarize it alongside the           standby + unprocessed active tail
  next model call or tool batch              |
@@ -124,8 +138,11 @@ completed conversation request -> actual input usage
 After each state advance the executor plans at most one span, if none is in flight. Planning is
 awaited and makes one count request (or estimate) per candidate boundary. The summary call then
 runs concurrently with the next model call or tool batch, polled in the same task rather than
-spawned. It is committed when it finishes, and awaited before the run returns. A config change at
-a run boundary discards it. A background summary failure is recorded as `CompactionSummaryFailed`
+spawned. It is committed when it finishes, and awaited before the run returns. That wait never
+holds back input: when input is queued while the session is `Idle` and a summary is still in
+flight, the run collects it at once and keeps polling the summary beside the next model call or
+tool batch. Senders signal each queued input to the owning session for this. A config change at a
+run boundary discards the summary. A background summary failure is recorded as `CompactionSummaryFailed`
 and does not fail or suspend the run, and background planning errors are skipped silently. Inside
 cutover, a summary or planning failure fails the compaction instead.
 
@@ -147,8 +164,11 @@ call ([executor](executor.md#automatic-output-continuation)), and the segments' 
 summary; a tool call instead fails the summary. The summary is stored as a `User` message with
 origin `Summary`.
 
-Cutover first drains the plan loop: every remaining eligible span is summarized in turn, inside
-`Compacting`. It then builds the candidate from standby plus the raw tail. It never summarizes the
+Cutover first catches up inside `Compacting`: it plans every remaining eligible span, starts all
+their summary calls at once, and commits the results in span order, since each continues the
+standby where the previous one ended. A failure fails the compaction but keeps the spans committed
+before it. The spans share the prefix they repeat, so they differ only in their instruction. It
+then builds the candidate from standby plus the raw tail. It never summarizes the
 latest raw tail, creates a handoff, or summarizes existing summaries again.
 `Generation.compaction_cursor` identifies the first remaining raw entry. Removing a prefix adjusts
 this position; the grafted tail stays eligible. Old generations and the complete history remain
@@ -187,7 +207,8 @@ and committing. No signature is rewritten and no tool result is fabricated. A `M
 expose its protocol or implement `validate_request`.
 
 Leading System messages and pinned Developer messages (`fixed: true`) are preserved verbatim until
-the first unpinned message. New Developer messages default to `fixed: false` at the HTTP API; old
+the first unpinned message. Local compaction also keeps the encrypted compaction items right after
+them (see [Provider-switch handoff](#provider-switch-handoff)). New Developer messages default to `fixed: false` at the HTTP API; old
 stored messages without a `fixed` field keep their previous pinned behavior. Tool schemas also
 remain. If no protocol-valid remaining context fits alongside that prefix, compaction fails and
 preserves the old active generation. A context rejection cannot be handled by retrying an
