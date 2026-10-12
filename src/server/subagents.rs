@@ -124,7 +124,7 @@ pub async fn launch(
   let manager = app.subagents.clone();
   manager.update_status(&agent_id, "starting").await;
   let provider_id = {
-    let configuration = app.configuration.lock().await;
+    let configuration = app.config_file.lock().await;
     if configuration.config.defaults.provider.is_empty() {
       "openai".to_string()
     } else {
@@ -134,16 +134,27 @@ pub async fn launch(
   let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
   let mut config = crate::session::SessionConfig::new("");
   config.tools = Vec::new();
-  let read_only = agent_type == "explore";
-  let _ = read_only;
+  // "explore" agents investigate and report: no side effects, no shell.
+  config.permission = if agent_type == "explore" {
+    crate::session::PermissionMode::ReadOnly
+  } else {
+    crate::session::PermissionMode::Operate
+  };
+  let shell = agent_type != "explore";
   let slot = app
     .create_session(crate::server::session::CreateSession {
       initial_messages: Vec::new(),
+      initial_origins: Vec::new(),
       name: format!("subagent {agent_id}: {description}"),
       provider: provider_id.clone(),
       config,
       cwd,
-      shell: !read_only,
+      tools: crate::server::session::ToolChanges {
+        shell: Some(shell),
+        ask_user: Some(false),
+        mcp: Some(shell),
+        web_search: Some(shell),
+      },
       metadata: json!({"subagent": {"id": agent_id, "parent": parent_id}}),
     })
     .await
@@ -155,38 +166,36 @@ pub async fn launch(
     metadata: json!({"source": "subagent", "agent_id": agent_id}),
     content: vec![crate::protocol::ContentBlock::Text { text: prompt }],
   };
-  let owner = slot.clone();
-  let entry = crate::server::error::blocking(move || {
-    Ok(owner.handle.enqueue_message(message)?)
-  })
-  .await
-  .map_err(|error| format!("subagent enqueue failed: {error}"))?;
+  let entry = slot
+    .enqueue(message)
+    .await
+    .map_err(|error| format!("subagent enqueue failed: {error}"))?;
+  slot.touch().map_err(|error| format!("subagent touch failed: {error}"))?;
+  slot.schedule(&app);
   let _ = app.events.send(json!({"type": "session_changed", "id": session_id}));
-  crate::server::http::content::schedule(app.clone(), slot.clone());
   // Completion watcher: when the session idles with no queued input, deliver to the parent.
   let watcher_app = app.clone();
   let watcher_slot = slot.clone();
   let watcher_parent = parent_id.clone();
   let watcher_agent = agent_id.clone();
-  app.tasks.spawn(async move {
+  app.lifecycle.tasks.spawn(async move {
+    // Waits for the subagent to settle: no operation running and nothing queued.
     loop {
       tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-      let session = watcher_slot.session.lock().await;
-      if !watcher_slot.control.lock().unwrap().is_some()
-        && session.get_state().is_stable()
-      {
-        // Idle. Deliver a completion notice with the descriptor summary; the full
-        // transcript lives in the subagent session and stays browsable.
-        drop(session);
-        let descriptor = watcher_slot.get_descriptor();
-        let summary = format!(
-          "session: {}\nname: {}\nmessages processed; open the session to read the transcript.",
-          descriptor.id, descriptor.name
-        );
-        manager.update_status(&watcher_agent, "completed").await;
-        deliver_to_parent(&watcher_app, &watcher_parent, &watcher_agent, &summary).await;
-        break;
+      let status = watcher_slot.get_status();
+      if status.status.running || status.queue_count > 0 {
+        continue;
       }
+      // Idle. Deliver a completion notice with the descriptor summary; the full
+      // transcript lives in the subagent session and stays browsable.
+      let descriptor = watcher_slot.get_descriptor();
+      let summary = format!(
+        "session: {}\nname: {}\nmessages processed; open the session to read the transcript.",
+        descriptor.id, descriptor.name
+      );
+      manager.update_status(&watcher_agent, "completed").await;
+      deliver_to_parent(&watcher_app, &watcher_parent, &watcher_agent, &summary).await;
+      break;
     }
   });
   Ok(json!({"agent_id": agent_id, "session_id": session_id, "entry": entry, "status": "background"}))
@@ -202,13 +211,12 @@ async fn deliver_to_parent(app: &Arc<App>, parent_id: &str, agent_id: &str, summ
       text: format!("Subagent {agent_id} finished.\n{summary}"),
     }],
   };
-  let _ = crate::server::error::blocking({
-    let parent = parent.clone();
-    move || Ok(parent.handle.enqueue_message(message)?)
-  })
-  .await;
+  let _ = parent
+    .enqueue(message)
+    .await
+    .map_err(|error| format!("subagent delivery failed: {error}"));
   let _ = app.events.send(json!({"type": "session_changed", "id": parent_id}));
   if let Ok(parent_slot) = app.get_session(parent_id).await {
-    crate::server::http::content::schedule(app.clone(), parent_slot);
+    parent_slot.schedule(app);
   }
 }

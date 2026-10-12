@@ -126,9 +126,9 @@ impl SkillSearchTool {
 
   pub fn execute(
     &self,
-    call: &crate::executor::tool::ToolCall,
-  ) -> crate::executor::tool::ToolOutcome {
-    use crate::executor::tool::ToolOutcome;
+    call: &crate::session::ToolCall,
+  ) -> crate::session::ToolOutcome {
+    use crate::session::ToolOutcome;
     if let Some(name) = call.arguments.get("name").and_then(Value::as_str) {
       let Some(skill) = self.skills.iter().find(|skill| skill.name == name) else {
         return ToolOutcome::Failed(format!("no skill named {name}"));

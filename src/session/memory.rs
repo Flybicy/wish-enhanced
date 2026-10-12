@@ -173,20 +173,15 @@ impl MemoryRecallTool {
       }),
     }
   }
-
-  pub fn get_status(&self) -> Value {
-    let (observations, reflections) = self.store.counts();
-    serde_json::json!({"observations": observations, "reflections": reflections})
-  }
 }
 
 impl crate::executor::tool::ToolExecutor for MemoryRecallTool {
   async fn execute(
     &self,
-    call: &crate::executor::tool::ToolCall,
+    call: &crate::session::ToolCall,
     _control: &crate::executor::ExecutionControl,
-  ) -> crate::executor::tool::ToolOutcome {
-    use crate::executor::tool::ToolOutcome;
+  ) -> crate::session::ToolOutcome {
+    use crate::session::ToolOutcome;
     let Some(query) = call.arguments.get("query").and_then(Value::as_str) else {
       return ToolOutcome::Failed("query is required".into());
     };

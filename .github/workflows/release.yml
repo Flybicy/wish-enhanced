@@ -4,12 +4,114 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build when not running from a tag push
+        required: false
+        type: string
 
 permissions:
   contents: write
 
 jobs:
+  web:
+    name: Build the web app
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: wish-web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web
+          path: wish-web/dist
+          if-no-files-found: error
+
+  build:
+    name: Archive ${{ matrix.target }}
+    needs: web
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: macos-15
+            target: x86_64-apple-darwin
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: web
+          path: web
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          target="${{ matrix.target }}"
+          package="wish-enhanced-${version}-${target}"
+          staging="dist/${package}"
+          exe=""
+          if [[ "$target" == *windows* ]]; then
+            exe=".exe"
+          fi
+          mkdir -p "$staging"
+          cp "target/${target}/release/wish${exe}" "$staging/"
+          cp -R web "$staging/web"
+          cp LICENSE README.md "$staging/"
+          if [[ "$target" == *windows* ]]; then
+            # Python writes the `/` separators zip requires; Compress-Archive writes `\`.
+            (cd dist && python -m zipfile -c "${package}.zip" "$package")
+            archive="dist/${package}.zip"
+          else
+            tar -czf "dist/${package}.tar.gz" -C dist "$package"
+            archive="dist/${package}.tar.gz"
+          fi
+          if command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "$archive" > "${archive}.sha256"
+          else
+            sha256sum "$archive" > "${archive}.sha256"
+          fi
+
+      - name: Upload release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+
   build-windows:
+    name: Windows installer
     runs-on: windows-latest
     defaults:
       run:
@@ -33,16 +135,11 @@ jobs:
 
       - name: Build wish-core (release)
         run: cargo build --release
-        working-directory: .
 
-      - name: Build wish-web
-        run: |
-          $pnpmVersion = (Get-Content wish-web/package.json | ConvertFrom-Json).packageManager
-          npm i -g pnpm@12
-          pnpm --version
-          cd wish-web
-          pnpm install --frozen-lockfile
-          pnpm run build
+      - uses: actions/download-artifact@v4
+        with:
+          name: web
+          path: wish-web/dist
 
       - name: Download niubash release binaries
         run: |
@@ -52,7 +149,6 @@ jobs:
             Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "$env:TEMP\niubash.zip"
             Expand-Archive "$env:TEMP\niubash.zip" -DestinationPath "$env:TEMP\niubash"
             New-Item -ItemType Directory -Force -Path dist/niubash | Out-Null
-            # The release zip nests one versioned directory; flatten whichever layout arrives.
             $nested = Get-ChildItem "$env:TEMP\niubash" -Directory | Select-Object -First 1
             if ($nested -and (Test-Path (Join-Path $nested.FullName "niu.exe"))) {
               Copy-Item "$($nested.FullName)/*" dist/niubash -Recurse -Force
@@ -62,15 +158,13 @@ jobs:
           } else {
             Write-Host "::warning::no niubash x64 asset found; building from source"
             git clone --depth 1 https://github.com/unixwin/niubash.git niubash-src
-            cargo build --release
+            cargo build --release --manifest-path niubash-src/Cargo.toml
             New-Item -ItemType Directory -Force -Path dist/niubash | Out-Null
             Copy-Item "niubash-src/target/release/*.exe" dist/niubash -ErrorAction SilentlyContinue
           }
 
       - name: Bundle Python and document libraries
         run: |
-          # Embedded Python with the document stack, so installed sessions can
-          # write Word/Excel/PowerPoint/PDF without any system prerequisites.
           Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.13.2/python-3.13.2-embed-amd64.zip" -OutFile "${env:TEMP}\python-embed.zip"
           Expand-Archive "${env:TEMP}\python-embed.zip" dist/wish/python
           $pth = Get-ChildItem dist/wish/python/*._pth | Select-Object -First 1
@@ -82,12 +176,9 @@ jobs:
 
       - name: Bundle Node.js and MinGit
         run: |
-          # The common agent runtimes: Node for JS/TS tooling, MinGit so version
-          # control (and the snapshot tool's shadow repositories) work on a
-          # bare system with no developer prerequisites.
           Invoke-WebRequest -Uri "https://nodejs.org/dist/v22.14.0/node-v22.14.0-win-x64.zip" -OutFile "${env:TEMP}\node.zip"
           Expand-Archive "${env:TEMP}\node.zip" "$env:TEMP\node"
-          $dir = Get-ChildItem "${env:TEMP}\node" -Directory | Select-Object -First 1
+          $dir = Get-ChildItem "$env:TEMP\node" -Directory | Select-Object -First 1
           Move-Item $dir.FullName dist/wish/node
           Invoke-WebRequest -Uri "https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/MinGit-2.47.1-64-bit.zip" -OutFile "${env:TEMP}\mingit.zip"
           Expand-Archive "${env:TEMP}\mingit.zip" dist/wish/git
@@ -98,12 +189,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist/wish | Out-Null
           Copy-Item target/release/wish.exe dist/wish/
-          # The desktop window loads WebView2 through this loader; shipping it
-          # beside the exe keeps the app self-contained on bare systems.
           Copy-Item installer/WebView2Loader.dll dist/wish/
           Copy-Item installer/wish.ico dist/wish/
-          Copy-Item -Recurse wish-web/dist dist/wish/web
-          # keep the layout the platform.rs helper expects: niubash/niu.exe beside wish.exe
           if (Test-Path dist/niubash/niu.exe) {
             Move-Item dist/niubash dist/wish/niubash -Force
           }

@@ -8,7 +8,10 @@ surface is described in [the API reference](../api.md) and the config file in
 ## Process layout
 
 One process serves HTTP, drives sessions and calls upstreams. `src/main.rs` calls `server::run`,
-which reads `--config <file>`, opens storage and serves until SIGINT/SIGTERM.
+which reads `--config <file>` (or the user's file, `server/user_dirs.rs`), opens storage and serves
+until SIGINT/SIGTERM (on Windows until Ctrl-C, Ctrl-Break, console close or system shutdown; see
+`server/console.rs`). Besides the API it serves the web app when one is installed, and a server
+without a token checks every request's `Host` and changes' `Origin` first (`server/web.rs`).
 
 ```text
                              HTTP / SSE
@@ -18,14 +21,14 @@ which reads `--config <file>`, opens storage and serves until SIGINT/SIGTERM.
                   v                   v                     v
   executor/     run loop,           tool/                 session/
                 compaction          shell, history,       state machine, queue,
-                  |      |          view_image            generations, history
+                  |      |          view_image, ...       generations, history
                   |      +----------------------------------> |
-                  v                                           v
-  executor::model::Client                                  storage/
-  (retry via utils/)                                       SQLite + LRU + history index
+                  v (ModelCaller)                             v
+  client/       Client                                     storage/
+                (retry via utils/)                         SQLite + LRU + history index
                   |
                   v
-  protocol/     one converter per wire, outbound auth
+  protocol/     one converter per wire, endpoint auth
                   |
                   v
   transport/    one HTTP attempt: reqwest, SSE, AWS event-stream
@@ -43,7 +46,7 @@ these pages.
 - [upstream-compaction](protocol/upstream-compaction.md): asking a service to compact history.
 - [account-state](protocol/account-state.md): quota and balance readings.
 - [model-list](protocol/model-list.md): model catalogs.
-- [outbound](protocol/outbound.md): targets, auth placement, credentials, dispatch.
+- [endpoint](protocol/endpoint.md): targets, auth placement, credentials, building a call.
 - [error](protocol/error.md): the error vocabulary and what retries.
 
 ## Client and transport
@@ -53,7 +56,8 @@ these pages.
 
 ## Session engine
 
-- [session](session.md): state, queue, generations, control handles, crash settlement.
+- [session](session.md): state, the input queue and its sender, the reader, generations, crash
+  settlement.
 - [history](history.md): indexed history queries and search.
 - [statistics](statistics.md): model call records.
 
@@ -65,8 +69,17 @@ these pages.
 
 ## Storage
 
-- [storage](storage.md): typed SQLite objects and lists, cache, schema version.
+- [storage](storage.md): typed SQLite objects and lists, stored kinds, the history index, cache,
+  schema version.
+- [migration](migration.md): bringing an older data directory and configuration file up to date at
+  startup.
 
 ## Tools
 
-- [tools](tools.md): shell, history tools and `view_image`, with their server integration.
+- [tools](tools.md): shell, history tools, `view_image`, `ask_user` and `web_search`, with their
+  server integration.
+
+## MCP
+
+- [mcp](mcp.md): MCP servers reached from a session's shell through `wish mcp`: the client, the
+  instances, the bridge.

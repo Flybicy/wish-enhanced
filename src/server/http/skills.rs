@@ -18,10 +18,10 @@ use std::sync::Arc;
 /// effect of each entry side by side.
 pub async fn catalog(State(app): State<Arc<App>>) -> Result<Json<Value>, ApiError> {
   let (enabled, extra) = {
-    let configuration = app.configuration.lock().await;
+    let configuration = app.config_file.lock().await;
     (configuration.config.skills.enabled, configuration.config.skills.dirs.clone())
   };
-  let data_dir = app.data_dir.join("skills");
+  let data_dir = app.data_dir.root().join("skills");
   blocking(move || {
     // The built-in directory always comes first: it is the one the installer
     // seeds and the reader cannot remove.
@@ -108,9 +108,9 @@ pub async fn install(
 
   // Only the built-in directory and the configured extras are writable targets,
   // so a caller cannot steer a write outside the directories the page shows.
-  let builtin = app.data_dir.join("skills");
+  let builtin = app.data_dir.root().join("skills");
   let extra = {
-    let configuration = app.configuration.lock().await;
+    let configuration = app.config_file.lock().await;
     configuration.config.skills.dirs.clone()
   };
   let target = match request.target.as_deref().map(str::trim).filter(|dir| !dir.is_empty()) {
