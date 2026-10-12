@@ -38,6 +38,12 @@ pub struct ToolSwitches {
   pub mcp: bool,
   /// Searches of the web: `web_search`, answered by the configured search providers.
   pub web_search: bool,
+  /// Whether `wish skill` in the session's shell may read skills. Like `mcp`, it changes neither
+  /// the tools nor the instructions, so switching it keeps the prompt cache.
+  pub skills: bool,
+  /// Whether `wish session` in the session's shell may see, make and message other sessions and
+  /// groups. Like `mcp`, switching it keeps the prompt cache.
+  pub sessions: bool,
 }
 impl ToolSwitches {
   /// These switches with a request's changes; what it leaves out stays as it is.
@@ -47,6 +53,8 @@ impl ToolSwitches {
       ask_user: changes.ask_user.unwrap_or(self.ask_user),
       mcp: changes.mcp.unwrap_or(self.mcp),
       web_search: changes.web_search.unwrap_or(self.web_search),
+      skills: changes.skills.unwrap_or(self.skills),
+      sessions: changes.sessions.unwrap_or(self.sessions),
     }
   }
   /// Whether a tool of this name runs under these switches.
@@ -69,6 +77,21 @@ pub struct ToolChanges {
   pub ask_user: Option<bool>,
   pub mcp: Option<bool>,
   pub web_search: Option<bool>,
+  pub skills: Option<bool>,
+  pub sessions: Option<bool>,
+}
+impl From<ToolSwitches> for ToolChanges {
+  /// Every switch set as these are.
+  fn from(switches: ToolSwitches) -> Self {
+    Self {
+      shell: Some(switches.shell),
+      ask_user: Some(switches.ask_user),
+      mcp: Some(switches.mcp),
+      web_search: Some(switches.web_search),
+      skills: Some(switches.skills),
+      sessions: Some(switches.sessions),
+    }
+  }
 }
 
 pub struct SessionTools {
@@ -89,8 +112,6 @@ pub struct SessionTools {
   session_id: String,
   /// Workspace snapshots for undo and redo; present when snapshotting is enabled.
   pub snapshot: Option<crate::tool::snapshot::SnapshotTool>,
-  /// Prompt skills loaded from the data directory.
-  pub skills: Option<crate::server::skills::SkillSearchTool>,
   /// Long-term memory recall over the shared ledger.
   pub memory: Option<crate::session::memory::MemoryRecallTool>,
 }
@@ -102,7 +123,6 @@ impl SessionTools {
     session_id: &str,
     app: Weak<App>,
     snapshot: Option<crate::tool::snapshot::SnapshotTool>,
-    skills: Option<crate::server::skills::SkillSearchTool>,
     memory: Option<crate::session::memory::MemoryRecallTool>,
   ) -> Self {
     Self {
@@ -118,7 +138,6 @@ impl SessionTools {
       app,
       session_id: session_id.to_owned(),
       snapshot,
-      skills,
       memory,
     }
   }
@@ -328,12 +347,6 @@ impl SessionTools {
         };
         snapshot.execute(call, control).await
       }
-      "skill_search" => {
-        let Some(skills) = &self.skills else {
-          return ToolOutcome::Failed("skills are disabled in the configuration".into());
-        };
-        skills.execute(call)
-      }
       "memory_recall" => {
         let Some(memory) = &self.memory else {
           return ToolOutcome::Failed("memory is disabled in the configuration".into());
@@ -449,7 +462,6 @@ pub(crate) fn is_read_only(name: &str) -> bool {
       | "history_query"
       | "shell_poll"
       | "view_image"
-      | "skill_search"
       | "memory_recall"
       | "subagent_result"
   )
@@ -611,7 +623,6 @@ mod tests {
       "history_search",
       "history_read",
       "history_query",
-      "skill_search",
       "memory_recall",
       "subagent_result",
     ] {
@@ -772,13 +783,10 @@ impl SessionSlot {
     if switches.web_search {
       config.tools.push(self.tools.web_search.get_specification());
     }
-    // wish-enhanced: workspace snapshots, prompt skills, long-term memory recall and
+    // wish-enhanced: workspace snapshots, long-term memory recall and
     // subagent delegation, each present only when the application enabled it.
     if let Some(snapshot) = &self.tools.snapshot {
       config.tools.extend(snapshot.get_specifications());
-    }
-    if let Some(skills) = &self.tools.skills {
-      config.tools.push(skills.get_specification());
     }
     if let Some(memory) = &self.tools.memory {
       config.tools.push(memory.get_specification());

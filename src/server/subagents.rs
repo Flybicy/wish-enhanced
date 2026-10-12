@@ -143,17 +143,21 @@ pub async fn launch(
   let shell = agent_type != "explore";
   let slot = app
     .create_session(crate::server::session::CreateSession {
+      created_by: None,
       initial_messages: Vec::new(),
       initial_origins: Vec::new(),
       name: format!("subagent {agent_id}: {description}"),
       provider: provider_id.clone(),
       config,
       cwd,
+      folder: None,
       tools: crate::server::session::ToolChanges {
         shell: Some(shell),
         ask_user: Some(false),
         mcp: Some(shell),
         web_search: Some(shell),
+        skills: Some(false),
+        sessions: Some(false),
       },
       metadata: json!({"subagent": {"id": agent_id, "parent": parent_id}}),
     })

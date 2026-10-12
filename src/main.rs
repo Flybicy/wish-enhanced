@@ -17,5 +17,6 @@ mod utils;
 use protocol::error::Error;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-  server::run()
+  let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+  rt.block_on(server::run())
 }

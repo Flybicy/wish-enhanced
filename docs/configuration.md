@@ -3,11 +3,11 @@
 Wish reads one JSON file: the one `--config` names, or else its user's.
 
 ```sh
-wish-agent                                # the user's configuration
-wish-agent --config /path/to/config.json
+wish                                # the user's configuration
+wish --config /path/to/config.json
 ```
 
-Packages install the program as `wish-agent`; a build from source is
+Packages install the program as `wish`; a build from source is
 `target/release/wish`. The user's configuration is
 `$XDG_CONFIG_HOME/wish-agent/config.json` (`~/.config/wish-agent/config.json`)
 on Linux, `~/Library/Application Support/wish-agent/config.json` on macOS and
@@ -41,6 +41,7 @@ folder keeps being used as-is.
 - [Proxy](#proxy)
 - [Shell](#shell)
 - [MCP servers](#mcp-servers)
+- [Skills](#skills)
 - [Secrets](#secrets)
 - [Applying changes](#applying-changes)
 - [Data directory](#data-directory)
@@ -104,7 +105,7 @@ fields are rejected everywhere, so typos fail loudly.
 | `listen` | `"127.0.0.1:9780"` | Address and port to listen on, as `IP:port` (`[::1]:9780` for IPv6). Host names are not accepted |
 | `data_dir` | `"data"` | Where sessions and attachments are stored. A relative path is resolved against the directory Wish is started from, so prefer an absolute path |
 | `bearer_token_env` | `null` | Name of an environment variable holding the API access token. When set, every `/api` request needs `Authorization: Bearer <token>`; write requests are accepted only from this server's own origin or a CLI. The variable must be set and non-empty at startup. When unset, reads work but all write requests fail closed with HTTP 401 |
-| `web_dir` | `null` | The built web app, served at `/`. When unset, Wish uses the `web` directory beside its program, where its packages and release archives put the app (a link to the program, such as `wish-agent` on the `PATH`, is followed first); finding none, it serves the API alone. A directory set here must hold `index.html` |
+| `web_dir` | `null` | The built web app, served at `/`. When unset, Wish uses the `web` directory beside its program, where its packages and release archives put the app (a link to the program, such as `wish` on the `PATH`, is followed first); finding none, it serves the API alone. A directory set here must hold `index.html` |
 | `allowed_hosts` | `[]` | `host:port` names browsers may reach Wish by besides `localhost`, `127.0.0.1`, `[::1]` and `listen`, such as `192.168.1.20:8790` or `wish.example.com`. Requests addressed to another name are refused (`421`), and changes sent from another origin are refused (`403`), so a web page cannot drive Wish through a visitor's browser |
 | `providers` | `{}` | Model providers by ID; see [Providers](#providers) |
 | `defaults` | | Defaults for new sessions; see [Session defaults](#session-defaults) |
@@ -112,6 +113,8 @@ fields are rejected everywhere, so typos fail loudly.
 | `shell` | platform shell | The shell commands run in; see [Shell](#shell) |
 | `mcp` | `{"servers": {}}` | MCP servers sessions can call; see [MCP servers](#mcp-servers) |
 | `search` | `{"order": [], "providers": {}}` | The services the `web_search` tool asks; see [Web search](#web-search) |
+| `skills` | `{"dirs": [], "disabled": []}` | Where sessions find skills besides Wish's own directory, and which are off; see [Skills](#skills) |
+| `usage` | `{"stream_sample_limit": 20000}` | How much of the usage records is kept; see [Usage records](#usage-records) |
 
 ## Providers
 
@@ -129,12 +132,12 @@ entry needs at least `protocol`, `base_url` and `path`.
 | `base_url` | required | `http://` or `https://` origin, optionally with a path prefix. Credential names such as `{region}` or `{workspace_id}` are replaced by their values |
 | `path` | required | Request path appended to `base_url`. `{model}` is replaced by the model ID, and credential names as in `base_url` |
 | `display_name` | `null` | Name shown in the web app |
-| `preset` | `null` | ID of the preset this entry came from. It adds the preset's branding and default request headers, and enables ChatGPT sign-in for `openai_codex` |
+| `preset` | `null` | ID of the preset this entry came from; see [Presets](#presets). It adds the preset's branding and default request headers, and enables ChatGPT sign-in for `openai_codex` and GitHub sign-in for `github_copilot` |
 | `enabled` | `true` | `false` keeps the entry but refuses new calls through it |
 | `auth` | `"bearer"` | How requests are authenticated, see [below](#authentication) |
 | `api_key` / `api_key_env` | `null` | The API key, or the name of an environment variable holding it; see [Secrets](#secrets) |
 | `credentials` / `credentials_env` | `{}` | Extra credentials by name, or the environment variables holding them |
-| `headers` | `{}` | Extra request headers. They override preset headers. `{session}` in a value becomes the Wish session ID, which some services use for caching |
+| `headers` | `{}` | Extra request headers, sent with every call to the provider, model and account reads included. They override preset headers. `{session}` in a value becomes the Wish session ID, which some services use for caching. An Anthropic key not scoped to a workspace needs `anthropic-workspace-id` here |
 | `proxy_enabled` | `true` | `false` always connects directly, ignoring the [proxy](#proxy) |
 | `models` | `{}` | Per-model settings by model ID, see [below](#per-model-settings) |
 | `model_list` | `null` | Catalog protocol, used for the model picker |
@@ -144,7 +147,7 @@ entry needs at least `protocol`, `base_url` and `path`.
 | `compaction` | `null` | Upstream compaction protocol, to let the provider compact the context itself |
 | `account_state` | `null` | Protocol for reading balance or quota |
 | `account_state_base_url` | `null` | Host the account reading is asked on, for a service with regional twins (`https://open.bigmodel.cn` for a Zhipu plan). Without it, the protocol's own host; the provider's `base_url` is never used for it |
-| `refresh_token`, `expires_at` | `null` | Written by ChatGPT sign-in; not meant to be edited by hand |
+| `refresh_token`, `expires_at` | `null` | Written by ChatGPT and GitHub sign-in; not meant to be edited by hand |
 
 ### Protocols
 
@@ -166,8 +169,8 @@ Optional capabilities, each of which must match the protocol:
 | --- | --- |
 | `token_count` | `openai_responses` (with `openai_responses` or `plaintext_responses`), `anthropic_messages` (with `anthropic_messages`), `google_generate_content` (with `google_generate_content`) |
 | `compaction` | `openai_responses` (with `openai_responses` or `plaintext_responses`), `openai_responses_streamed` (with `codex_responses`) |
-| `model_list` | `openai_models`, `openai_codex_models`, `qwen_models`, `anthropic_models`, `google_models`, `bedrock_models` |
-| `account_state` | `deepseek_user_balance`, `kimi_open_balance`, `kimi_code_companion_usage`, `zai_coding_plan_monitor`, `minimax_token_plan_remains`, `minimax_account_balance`, `siliconflow_balance`, `openrouter_key_quota`, `openrouter_credits`, `hf_whoami_billing`, `qwen_workspace_quota`, `openai_codex_usage` |
+| `model_list` | `openai_models`, `openai_codex_models`, `qwen_models`, `anthropic_models`, `google_models`, `bedrock_models`, `github_copilot_models` |
+| `account_state` | `deepseek_user_balance`, `kimi_open_balance`, `kimi_code_companion_usage`, `zai_coding_plan_monitor`, `minimax_token_plan_remains`, `minimax_account_balance`, `siliconflow_balance`, `openrouter_key_quota`, `openrouter_credits`, `hf_whoami_billing`, `qwen_workspace_quota`, `openai_codex_usage`, `github_copilot_usage`, `magpie_quotas` |
 
 A mismatched pairing is refused when the configuration is loaded or saved.
 
@@ -185,6 +188,44 @@ Credential names are `region`, `access_key_id`, `secret_access_key`,
 `session_token`, `account_id`, `workspace_id`, `team_id`, `organization` and
 `project`.
 
+### Presets
+
+Each preset fills in one service's address, protocols, catalog and account
+reading; the web app offers them when you add a provider. The first protocol
+listed is the one a new provider starts with. A preset whose service has no
+model list leaves the models to be added by hand.
+
+| Service | Presets |
+| --- | --- |
+| DeepSeek | `deepseek` |
+| Xiaomi MiMo | `mimo_payg`; Token Plan `mimo_token_cn`, `mimo_token_sgp`, `mimo_token_eu` |
+| Z.AI, Zhipu | `zai_global`, `zhipu_cn`; Coding Plan `zai_coding_global`, `zhipu_coding_cn` |
+| SiliconFlow | `siliconflow_cn`, `siliconflow_global` |
+| Qwen (Model Studio) | `qwen_cn`, `qwen_singapore`, `qwen_hong_kong`, `qwen_us`; workspaces `qwen_workspace_cn`, `qwen_workspace_singapore`, `qwen_workspace_germany`, `qwen_workspace_japan`, `qwen_workspace_us`; Coding Plan `qwen_coding_cn`, `qwen_coding_global`; Token Plan `qwen_token_cn` |
+| Kimi | `kimi_cn`, `kimi_global`; Kimi Code `kimi_code` |
+| Tencent TokenHub | `tencent_hunyuan_cn`, `tencent_hunyuan_global`; Token Plan `tencent_token_cn` |
+| OpenAI | `openai`; ChatGPT subscription `openai_codex` |
+| GitHub Copilot | `github_copilot`, a Copilot subscription; see [GitHub Copilot sign-in](#github-copilot-sign-in) |
+| Anthropic | `anthropic` |
+| Google Gemini | `google_gemini` |
+| AWS Bedrock | `aws_bedrock` |
+| MiniMax | `minimax_cn`, `minimax_global`; Token Plan `minimax_token_cn`, `minimax_token_global` |
+| StepFun | `stepfun_global`, `stepfun_cn`; Step Plan `stepfun_plan_global`, `stepfun_plan_cn` |
+| Baidu Qianfan | `baidu_qianfan_cn`; Token Plan `baidu_qianfan_token_cn` (personal), `baidu_qianfan_token_team_cn` (enterprise) |
+| Volcengine Ark | `volcengine_cn`; Coding Plan `volcengine_coding_cn`; Agent Plan `volcengine_agent_cn` |
+| Huawei Cloud MaaS | `huawei_cloud_cn`; Token Plan `huawei_cloud_token_cn` |
+| Routers and hosts | `openrouter`, `huggingface_router`, `opencode_zen`, `opencode_go`, `together`, `fireworks`, `nvidia_nim`, `modelscope_cn`, `aihubmix`, `ai302`, `cherryin`, `pipellm`, `yylx`, `commandcode` |
+| Mistral, xAI, Groq, Cerebras | `mistral`, `xai`, `groq`, `cerebras` |
+| Ollama | `ollama_cloud` (cloud models, with a key); `ollama` on your machine |
+| Gateways | `magpie`; see [Magpie](#magpie) |
+| Local servers | `lm_studio`, `vllm`, `omlx`, `mlx_serve` |
+
+The plans built for coding agents (Step Plan, Qianfan and Huawei Cloud's
+Token Plans, Volcengine's Coding and Agent Plans) start on Anthropic
+Messages, the wire their vendors set coding agents up with, where the models'
+thinking travels back with each turn. The Qianfan and Volcengine plans serve
+no model list.
+
 ### ChatGPT sign-in
 
 A provider with `"preset": "openai_codex"` uses a ChatGPT subscription instead
@@ -194,6 +235,47 @@ The sign-in opens a temporary callback on `127.0.0.1:1455`, so the browser
 must run on the same machine as Wish; otherwise, paste the final redirect URL
 back into the web app. The flow is described in the
 [API reference](api.md#chatgpt-sign-in).
+
+### GitHub Copilot sign-in
+
+A provider with `"preset": "github_copilot"` uses a GitHub Copilot
+subscription. Add it in the web app and choose **Sign in with GitHub**: Wish
+shows a code to type at `github.com/login/device`, in a browser on any machine.
+It keeps the GitHub token as `refresh_token` and a Copilot session, which lasts
+about half an hour, as the key, and renews the session in the background. An
+account without Copilot is refused at sign-in. The flow is described in the
+[API reference](api.md#github-copilot-sign-in).
+
+Copilot serves most models on Chat Completions; its newest GPT models only on
+Responses (`openai_responses`) and Claude also on Messages
+(`anthropic_messages`). A provider speaks one protocol, so add a second
+Copilot provider, signed in on its own, for models of the other wire. Wish
+asks as Copilot's editor extension does, marking the calls that carry a tool's
+result back as the agent's (`x-initiator: agent`), so only the turns you start
+count as premium requests. A model whose terms wait in the account's Copilot
+settings is listed with a warning and refused until it is enabled there. The
+account reading (`github_copilot_usage`) shows the month's chat, completion
+and premium-request allowances.
+
+### Magpie
+
+[Magpie](https://github.com/yetone/magpie) is a local gateway that serves the
+models of every provider and subscription it holds, named `provider/model`, on
+`http://127.0.0.1:3425` in the OpenAI Chat, OpenAI Responses and Anthropic
+Messages protocols. The `magpie` preset connects to it: pick the protocol the
+models you use speak natively, since Magpie passes those calls straight
+through and translates the rest. Model lists come from its `/v1/models`, and
+its account reading (`magpie_quotas`) shows what is left of every subscription
+and plan it holds, each window named after its account; the balances of its
+API keys are not included.
+
+On its own machine Magpie takes any key; the preset sends `magpie`. A Magpie
+shared on its local network (Settings → Share on local network) takes one of
+its gateway keys: set `base_url` to `http://<address>:3425/v1`,
+`model_list_base_url` likewise, `account_state_base_url` to
+`http://<address>:3425` and `api_key` to the key. The preset connects directly, without the [proxy](#proxy):
+a proxy can add a forwarding header, and Magpie treats a request carrying one
+as another machine's.
 
 ### Per-model settings
 
@@ -220,7 +302,7 @@ sessions keep their own settings.
 | `provider` | `""` | Default provider ID; must exist in `providers` |
 | `model` | `""` | Default model ID |
 | `cwd` | Wish's start directory | Default working directory, an absolute path |
-| `tools` | `{"shell": true, "ask_user": true, "mcp": true, "web_search": true}` | The optional tools new sessions get: `shell` runs commands in the working directory, `ask_user` lets the model ask you questions, `mcp` lets it call [MCP servers](#mcp-servers) from the shell, `web_search` lets it search the web through the [search providers](#web-search). Each session can switch them later. A new session gets `web_search` only while some search provider can answer |
+| `tools` | `{"shell": true, "ask_user": true, "mcp": true, "web_search": true, "skills": true, "sessions": true}` | The optional tools new sessions get: `shell` runs commands in the working directory, `ask_user` lets the model ask you questions, `mcp` lets it call [MCP servers](#mcp-servers) from the shell, `web_search` lets it search the web through the [search providers](#web-search), `skills` lets it read [skills](#skills) from the shell, `sessions` lets it see, make and message other sessions and [groups](#groups) from the shell. Each session can switch them later. A new session gets `web_search` only while some search provider can answer |
 | `stream` | `true` | Stream model output |
 | `instructions` | `""` | Extra instructions the web app adds to each new session |
 | `reasoning` | `null` | `{"enabled": bool, "effort": "low", "summary": "Auto"}`. Accepted effort values depend on the provider |
@@ -329,6 +411,82 @@ transport sets `Accept`, `Content-Type`, `Mcp-Session-Id`,
 `MCP-Protocol-Version` and `Last-Event-ID` itself, and `auth_provider` excludes
 an `Authorization` header.
 
+## Skills
+
+A skill is a directory holding a `SKILL.md`: instructions for a particular kind
+of task, and any scripts or reference files they point to. Its YAML front
+matter gives its `name` and a `description` of what it is for, the format other
+agents use too, so the same skills can serve them all:
+
+```markdown
+---
+name: deploy
+description: Ship the service to production with the release script.
+---
+
+Run `scripts/release.sh` from the repository root, then ...
+```
+
+Sessions find skills, in this order, in `.agents/skills` under their working
+directory, in Wish's own directory (`skills` beside the configuration file,
+made at startup) and in each of `skills.dirs`; `~` stands for the home
+directory. Skills can sit in folders by kind, a few levels deep. The first of a
+name wins, and a name in `skills.disabled` is off wherever it is.
+
+```json
+"skills": {"dirs": ["~/.config/agents/skills"], "disabled": ["old-deploy"]}
+```
+
+The model is told how to find skills and none of the skills themselves, so
+adding, removing or switching one off never changes its request or resets its
+prompt cache. It runs `wish skill find <words>` or `wish skill list` in the
+shell when a task may have one, and `wish skill show <name>` to read it.
+Changes apply to the next command; a session's `skills` switch decides whether
+it may read them at all.
+
+## Groups
+
+A group is a chat among you and several sessions, like a chat app's group
+chat. Each post goes to the group's own transcript and to every other member,
+which reads it as a message headed by the group and the author. The user is
+in every group and sees every message. Deleting a group deletes its messages
+and the files posted to it; its sessions stay.
+
+Every post wakes every other member, yours and a session's alike. A session
+takes part as a person would: it reads what was said, and speaks in the group
+only when it has something to say, by sending with `wish session send` from
+its shell - what it answers otherwise stays in its own conversation. A session
+without a shell reads its groups but never speaks there.
+
+Sessions reach one another and the groups with `wish session` in the shell
+(list, show, create, config, delete, send, group create/add/rename/leave). The model
+is told how, and none of them, so it never changes a byte of its request. A
+session sees every session and group and may message any session - which
+makes a group of the two of them and you - but configures and deletes only
+itself and the sessions it made. A session's `sessions` switch decides whether
+the command works at all.
+
+## Usage records
+
+`management.sqlite` keeps every model call's token usage and a one-second
+sample of each streamed response's speed, for the usage statistics. Deleting a
+session keeps its records, so the statistics still count what it spent; the
+storage card on the statistics page, or
+[`POST /api/storage/prune-usage`](api.md#post-apistorageprune-usage), clears
+them.
+
+`usage.stream_sample_limit` caps the speed samples kept (at least 100;
+`null` keeps every one). Past it, neighbouring samples of the same session and
+model are merged, the pairs that would span the least time first, until
+nine-tenths of the limit remain. A merged sample adds up the output and
+streaming time of both, so totals and average speeds stay as they were and only
+the detail coarsens, dense stretches evenly and first. A lowered limit applies
+at once.
+
+```json
+"usage": {"stream_sample_limit": 50000}
+```
+
 ## Web search
 
 `search.providers` lists the services the `web_search` tool asks, by ID, and
@@ -427,6 +585,7 @@ values, so protect it accordingly (for example `chmod 600`).
 | Shell | On the next command |
 | MCP servers | On the next call. An instance whose server changed, or would now be reached with another key or proxy, is closed and started again |
 | Defaults | For the next new session |
+| `usage.stream_sample_limit` | At once |
 | `listen`, `data_dir`, `bearer_token_env`, `web_dir`, `allowed_hosts` | After a restart. The API refuses to change them |
 | Values of environment variables | After a restart |
 

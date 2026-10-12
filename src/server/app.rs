@@ -2,13 +2,15 @@
 //! index, the configuration and what is built from it (providers, the shell, MCP servers, search
 //! providers), the open sessions - and its lifecycle from startup to shutdown.
 use crate::server::{
+  bridge::Bridge,
   codex_login::LoginManager,
   config::Config,
   config_file::ConfigFile,
+  copilot_login::CopilotLoginManager,
   data_dir::DataDir,
   error::{ApiError, blocking},
   management::ManagementStore,
-  mcp::{McpHub, bridge::Bridge},
+  mcp::McpHub,
   provider::{self, Provider, Providers, read_secret},
   search::{PreparedSearch, SearchHub},
   session::{CreateSession, Descriptor, SessionSlot, ToolSwitches},
@@ -34,6 +36,7 @@ pub struct App {
   pub management: Arc<ManagementStore>,
   pub config_file: AsyncMutex<ConfigFile>,
   pub codex_login: LoginManager,
+  pub copilot_login: CopilotLoginManager,
   /// Changes to the session list and the configuration, for `GET /events`.
   pub events: tokio::sync::broadcast::Sender<Value>,
   pub started: std::time::Instant,
@@ -47,7 +50,11 @@ pub struct App {
   pub data_dir: DataDir,
   pub bearer_token: Option<String>,
   pub lifecycle: Lifecycle,
-  /// MCP servers, their live connections, and the bridge sessions' shells reach them through.
+  /// How sessions' shells reach this server: `wish mcp` and `wish skill` go through it.
+  pub bridge: Bridge,
+  /// Wish's own skills: `skills` beside the configuration file.
+  pub skills_dir: PathBuf,
+  /// MCP servers and their live connections.
   pub mcp: McpHub,
   /// The search providers `web_search` asks.
   pub search: SearchHub,
@@ -126,16 +133,24 @@ impl App {
     let data_dir = DataDir::new(config.data_dir.clone());
     tokio::fs::create_dir_all(data_dir.root()).await.map_err(ApiError::internal)?;
     let (database, management_database) = (data_dir.database(), data_dir.management_database());
+    let sample_limit = config.usage.stream_sample_limit;
     let (storage, management) = blocking(move || {
-      Ok((
-        Storage::open(database, StorageOptions::default())?,
-        Arc::new(ManagementStore::open(&management_database)?),
-      ))
+      let management = ManagementStore::open(&management_database)?;
+      management.set_stream_sample_limit(sample_limit);
+      // A limit lowered while the server was stopped applies now.
+      if let Err(error) = management.merge_stream_samples() {
+        eprintln!("merging stream samples failed: {error:?}");
+      }
+      Ok((Storage::open(database, StorageOptions::default())?, Arc::new(management)))
     })
     .await?;
     let lifecycle = Lifecycle::new();
     let providers =
       provider::build_all(&config.providers, &config.proxy, &management, &lifecycle.tasks)?;
+    let skills_dir =
+      std::path::absolute(&config_path).map_err(ApiError::internal)?.with_file_name("skills");
+    // Made at once, so there is a place to put skills in.
+    let _ = std::fs::create_dir_all(&skills_dir);
     let config_file = ConfigFile::open(config_path, config.clone())?;
     let (events, _) = tokio::sync::broadcast::channel(256);
     let bearer_token = config
@@ -143,12 +158,8 @@ impl App {
       .as_ref()
       .map(|key| read_secret(key).map_err(ApiError::bad_request))
       .transpose()?;
-    let mcp = McpHub::new(
-      config.mcp.clone(),
-      config.proxy.clone(),
-      config.defaults.cwd.clone(),
-      Bridge::new(&data_dir),
-    );
+    let mcp = McpHub::new(config.mcp.clone(), config.proxy.clone(), config.defaults.cwd.clone());
+    let bridge = Bridge::new(&data_dir);
 
     let memory = if config.memory.enabled {
       match crate::session::memory::MemoryStore::open(data_dir.root().join("memory.sqlite")) {
@@ -166,12 +177,12 @@ impl App {
       config.subagents.max_depth,
     ));
     let subagents_enabled = config.subagents.enabled;
-
     let app = Arc::new(Self {
       storage,
       management,
       config_file: AsyncMutex::new(config_file),
       codex_login: LoginManager::default(),
+      copilot_login: CopilotLoginManager::default(),
       events,
       started: std::time::Instant::now(),
       providers: RwLock::new(providers),
@@ -180,6 +191,8 @@ impl App {
       data_dir,
       bearer_token,
       lifecycle,
+      bridge,
+      skills_dir,
       mcp,
       search,
       memory,
@@ -238,11 +251,25 @@ impl App {
     }
     // Without a word from the request: no shell and no web search, and questions to the user and
     // MCP allowed. Web search stays off while no search provider could answer it.
-    let mut tools = ToolSwitches { shell: false, ask_user: true, mcp: true, web_search: false }
-      .apply_changes(input.tools);
+    let mut tools = ToolSwitches {
+      shell: false,
+      ask_user: true,
+      mcp: true,
+      web_search: false,
+      skills: true,
+      sessions: true,
+    }
+    .apply_changes(input.tools);
     tools.web_search &= self.search.is_available(&self.providers.read().unwrap());
+    let folder = input.folder.take();
+    if let Some(folder) = &folder
+      && self.management.folder(folder)?.is_none()
+    {
+      return Err(ApiError::bad_request(format!("no folder `{folder}`")));
+    }
     let descriptor = Descriptor {
       pending_selection: None,
+      created_by: input.created_by,
       id: uuid::Uuid::new_v4().to_string(),
       provider: input.provider,
       cwd: input.cwd,
@@ -271,6 +298,9 @@ impl App {
     })
     .await?;
     let slot = self.open_slot(descriptor, session).await?;
+    if let Some(folder) = folder {
+      self.management.place(&[slot.get_descriptor().id], Some(&folder))?;
+    }
     self.sessions.lock().await.insert(slot.get_descriptor().id.clone(), slot.clone());
     Ok(slot)
   }
@@ -385,6 +415,13 @@ impl App {
       &providers,
     );
     self.search.apply(search);
+    self.management.set_stream_sample_limit(config.usage.stream_sample_limit);
+    let management = self.management.clone();
+    self.lifecycle.tasks.spawn_blocking(move || {
+      if let Err(error) = management.merge_stream_samples() {
+        eprintln!("merging stream samples failed: {error:?}");
+      }
+    });
     *self.providers.write().unwrap() = providers;
     *self.shell.write().unwrap() = shell.clone();
     for slot in self.sessions.lock().await.values() {

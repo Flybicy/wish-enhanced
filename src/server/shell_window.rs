@@ -134,8 +134,8 @@ fn save_placement(path: &Path, hwnd: HWND) {
 pub(crate) fn run(addr: SocketAddr, profile_dir: Option<PathBuf>, open_session: Option<String>) -> Result<(), String> {
   // The interface uses hash routing, so one session can be addressed directly.
   let url = match &open_session {
-    Some(id) if !id.is_empty() => format!("{}/#/s/{}", super::host_url(addr), id),
-    _ => super::host_url(addr),
+    Some(id) if !id.is_empty() => format!("http://{addr}/#/s/{id}"),
+    _ => format!("http://{addr}"),
   };
   log(&format!("window: starting for {url}"));
   let _ = URL.set(url);
