@@ -21,6 +21,7 @@ use crate::utils::time::civil_date;
 mod bocha;
 mod brave;
 mod codex;
+mod deepseek;
 mod exa;
 pub mod fetch;
 mod jina;
@@ -140,6 +141,8 @@ text_id_enum! {
     KimiCodeSearch => "kimi_code_search",
     /// MiniMax Token Plan's search, with the plan's key.
     MinimaxCodingPlanSearch => "minimax_coding_plan_search",
+    /// DeepSeek's search, with a DeepSeek API key.
+    DeepseekSearch => "deepseek_search",
   }
 }
 
@@ -163,7 +166,8 @@ impl SearchProtocol {
       | Self::BraveSearch
       | Self::SerperSearch
       | Self::SearxngSearch
-      | Self::BochaSearch => true,
+      | Self::BochaSearch
+      | Self::DeepseekSearch => true,
       Self::JinaSearch
       | Self::MetasoSearch
       | Self::KimiCodeSearch
@@ -187,6 +191,7 @@ impl SearchProtocol {
       Self::MetasoSearch => metaso::build_draft(query),
       Self::KimiCodeSearch => kimi::build_draft(query),
       Self::MinimaxCodingPlanSearch => minimax::build_draft(query),
+      Self::DeepseekSearch => deepseek::build_draft(query, now),
     }
   }
 
@@ -215,6 +220,7 @@ impl SearchProtocol {
       Self::MetasoSearch => metaso::parse_body(body),
       Self::KimiCodeSearch => kimi::parse_body(body),
       Self::MinimaxCodingPlanSearch => minimax::parse_body(body),
+      Self::DeepseekSearch => deepseek::parse_body(body),
     }
   }
 }

@@ -66,6 +66,10 @@ pub(super) fn find_source(protocol: SearchProtocol) -> Source {
     SearchProtocol::MinimaxCodingPlanSearch => {
       at(None, "/v1/coding_plan/search", AuthScheme::Bearer(None))
     }
+    // On DeepSeek's own host, whichever wire the lending provider's model calls take.
+    SearchProtocol::DeepseekSearch => {
+      at(Some("https://api.deepseek.com"), "/v1/tools/search", AuthScheme::Bearer(None))
+    }
     // Wherever the instance is: the caller's configuration says.
     SearchProtocol::SearxngSearch => at(None, "/search", AuthScheme::None),
   }
