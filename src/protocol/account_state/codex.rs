@@ -31,9 +31,11 @@
 //! Trade-offs:
 //! - An unlimited balance is reported as an unlimited window rather than as a number: an unlimited
 //!   balance read as a spendable amount is a lie with a decimal point.
-//! - `reached` is only reported where the wire says it, which is `limit_reached` on the account
-//!   endpoint: a head or a frame says how full a window is, not whether the service will refuse the
-//!   next call.
+//! - `reached` is decided per window, in a fixed order: the window's own `limit_reached`/`reached`
+//!   boolean, else its own `used_percent` (spent at a hundred) or `remaining` (nothing left), and
+//!   only a window that reports no quantity of its own takes the meter-level `limit_reached`,
+//!   because that switch is the meter's as a whole and one spent window must not stamp an
+//!   untouched one.
 //! - The window ids are the wire's own names for them, so nothing here claims to know what a
 //!   "primary" window measures.
 //! - `x-codex-limit-name`, `x-codex-promo-message` and `x-codex-rate-limit-reached-type` are
@@ -120,10 +122,38 @@ pub fn parse_usage(body: &Value) -> AccountState {
   state
 }
 
+/// A number a window carried, whether the wire wrote it as a number or as text.
+fn read_number(value: Option<&Value>) -> Option<f64> {
+  value.and_then(read_scalar_text).and_then(|text| text.parse::<f64>().ok())
+}
+
+/// A window's spent standing, judged by its own facts before its meter's.
+///
+/// `limit_reached` on the account endpoint is the meter's switch: any one window spent puts it up,
+/// so reading it into every window stamps the 5-hour window's exhaustion onto an untouched weekly
+/// one. Each window is therefore judged in a fixed order: its own `limit_reached`/`reached` boolean
+/// when it carries one, else its own `used_percent` (spent at a hundred or beyond), else its own
+/// `remaining` (nothing left); the meter's switch stands only for a window that reports no
+/// quantity of its own at all.
+fn window_reached(window: &Value, meter_reached: Option<bool>) -> Option<bool> {
+  if let Some(reached) =
+    window.get("limit_reached").or_else(|| window.get("reached")).and_then(Value::as_bool)
+  {
+    return Some(reached);
+  }
+  if let Some(percent) = read_number(window.get("used_percent")) {
+    return Some(percent >= 100.0);
+  }
+  if let Some(remaining) = read_number(window.get("remaining")) {
+    return Some(remaining <= 0.0);
+  }
+  meter_reached
+}
+
 /// One meter's two windows and the meter's own standing: the account's meter when `name` is empty,
 /// an additional meter (`gpt-reserve`) otherwise.
 fn append_meter_windows(name: &str, limit: &Value, quotas: &mut Vec<QuotaWindow>) {
-  let reached = limit.get("limit_reached").and_then(Value::as_bool);
+  let meter_reached = limit.get("limit_reached").and_then(Value::as_bool);
   for window in ["primary", "secondary"] {
     let key = format!("{window}_window");
     let Some(value) = limit.get(&key).filter(|value| value.is_object()) else { continue };
@@ -134,7 +164,7 @@ fn append_meter_windows(name: &str, limit: &Value, quotas: &mut Vec<QuotaWindow>
         .get("limit_window_seconds")
         .and_then(Value::as_u64)
         .map(|seconds| minutes_window(seconds / 60)),
-      reached,
+      reached: window_reached(value, meter_reached),
       ..read_window_amounts(id, value)
     });
   }
@@ -192,4 +222,60 @@ pub fn parse_headers(headers: &[(String, String)]) -> Option<AccountState> {
     return None;
   }
   Some(state)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use serde_json::json;
+
+  fn window<'a>(state: &'a AccountState, id: &str) -> &'a QuotaWindow {
+    state.quotas.iter().find(|quota| quota.id == id).unwrap_or_else(|| panic!("no `{id}` window"))
+  }
+
+  #[test]
+  fn the_meters_switch_does_not_stamp_an_untouched_window() {
+    let state = parse_usage(&json!({
+      "rate_limit": {
+        "limit_reached": true,
+        "primary_window": { "used_percent": 100, "limit_window_seconds": 5 * 3600 },
+        "secondary_window": { "used_percent": "15", "limit_window_seconds": 7 * 24 * 3600 },
+      }
+    }));
+    assert_eq!(window(&state, "primary").reached, Some(true));
+    assert_eq!(window(&state, "secondary").reached, Some(false));
+  }
+
+  #[test]
+  fn a_window_without_quantities_takes_the_meters_switch() {
+    let state = parse_usage(&json!({
+      "rate_limit": {
+        "limit_reached": true,
+        "primary_window": { "limit_window_seconds": 300 },
+        "secondary_window": {},
+      }
+    }));
+    assert_eq!(window(&state, "primary").reached, Some(true));
+    assert_eq!(window(&state, "secondary").reached, Some(true));
+  }
+
+  #[test]
+  fn a_windows_own_boolean_wins_over_its_percent() {
+    let state = parse_usage(&json!({
+      "rate_limit": { "primary_window": { "reached": false, "used_percent": 100 } }
+    }));
+    assert_eq!(window(&state, "primary").reached, Some(false));
+  }
+
+  #[test]
+  fn a_window_with_nothing_left_is_spent_without_the_meters_say_so() {
+    let state = parse_usage(&json!({
+      "rate_limit": {
+        "primary_window": { "remaining": 0 },
+        "secondary_window": { "remaining": "12.5" },
+      }
+    }));
+    assert_eq!(window(&state, "primary").reached, Some(true));
+    assert_eq!(window(&state, "secondary").reached, Some(false));
+  }
 }
