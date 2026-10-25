@@ -538,6 +538,7 @@ Search presets:
 | `openai_codex_search` | Borrowed from `openai_codex` | ChatGPT's search, the one Codex uses: `POST {base_url}/alpha/search` with the model provider's base URL |
 | `kimi_code_search` | Borrowed from `kimi_code` | Kimi Code's search, the one Kimi's coding CLI uses: `POST {base_url}/search`. Kimi expects clients to identify themselves truthfully and may refuse ones it does not know |
 | `minimax_coding_plan_search` | Borrowed from `minimax_token_cn`, `minimax_token_global` | MiniMax Token Plan's search, on the host of the plan's region. Ten results at most, no filters |
+| `deepseek_search` | Borrowed from `deepseek` | [DeepSeek's search](https://api-docs.deepseek.com/zh-cn/guides/search), billed per successful search on the DeepSeek account. Domains and a period travel as `site:` and `after:` in the query; the snippet is DeepSeek's summary written for models |
 | `tavily_keyless` | No key | [Tavily](https://docs.tavily.com/documentation/keyless) without an account: free and rate-limited by Tavily |
 | `tavily` | Own key | [Tavily](https://docs.tavily.com) with a key (`tvly-…`) |
 | `exa` | Own key | [Exa](https://exa.ai/docs/reference/search); the snippet is Exa's highlights |
