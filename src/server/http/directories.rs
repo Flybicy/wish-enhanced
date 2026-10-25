@@ -183,6 +183,8 @@ mod tests {
     assert!(listing.root);
     assert!(listing.path.is_empty());
     assert!(listing.parent.is_none());
+    // Drive letters exist on Windows only; elsewhere the mount points carry none.
+    #[cfg(windows)]
     assert!(listing.directories.iter().any(|entry| entry.contains(':')));
   }
 
