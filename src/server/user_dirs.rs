@@ -10,19 +10,51 @@ const LISTEN: &str = "127.0.0.1:8790";
 
 /// The configuration file, written first if there is none yet.
 pub fn ensure_config() -> Result<PathBuf, String> {
-  let (config_dir, data_dir) = locations()?;
-  let path = config_dir.join("config.json");
+  if let Some(path) = try_locations() {
+    return Ok(path);
+  }
+  // The user profile is unwritable (locked-down machine, AV, a profile dir
+  // created by an elevated run). A portable install must still start: keep
+  // the configuration and its data beside the executable instead.
+  let exe_dir = std::env::current_exe()
+    .ok()
+    .and_then(|exe| exe.parent().map(PathBuf::from))
+    .ok_or("cannot locate the executable for a portable configuration; pass --config")?;
+  let portable = exe_dir.join(NAME);
+  let path = portable.join("config.json");
   if path.exists() {
     return Ok(path);
   }
-  std::fs::create_dir_all(&config_dir)
-    .map_err(|error| format!("create {}: {error}", config_dir.display()))?;
-  let text = serde_json::to_string_pretty(&json!({"listen": LISTEN, "data_dir": data_dir}))
+  std::fs::create_dir_all(&portable)
+    .map_err(|error| format!("create {}: {error}", portable.display()))?;
+  let data = portable.join("data");
+  let text = serde_json::to_string_pretty(&json!({"listen": LISTEN, "data_dir": data}))
     .map_err(|error| error.to_string())?;
   std::fs::write(&path, format!("{text}\n"))
     .map_err(|error| format!("write {}: {error}", path.display()))?;
-  eprintln!("created {}", path.display());
+  eprintln!("created portable configuration {}", path.display());
   Ok(path)
+}
+
+/// The first writable user location: `None` when the profile cannot host a config.
+fn try_locations() -> Option<PathBuf> {
+  let (config_dir, data_dir) = locations().ok()?;
+  let path = config_dir.join("config.json");
+  if path.exists() {
+    return Some(path);
+  }
+  let text = serde_json::to_string_pretty(&json!({"listen": LISTEN, "data_dir": data_dir}))
+    .ok()?;
+  if std::fs::create_dir_all(&config_dir).is_err() {
+    return None;
+  }
+  match std::fs::write(&path, format!("{text}\n")) {
+    Ok(()) => {
+      eprintln!("created {}", path.display());
+      Some(path)
+    }
+    Err(_) => None,
+  }
 }
 
 /// The configuration's directory and the data directory a new configuration names.
@@ -47,4 +79,35 @@ fn locations() -> Result<(PathBuf, PathBuf), String> {
   let config = variable("XDG_CONFIG_HOME").unwrap_or_else(|| home.join(".config"));
   let data = variable("XDG_DATA_HOME").unwrap_or_else(|| home.join(".local/share"));
   Ok((config.join(NAME), data.join(NAME)))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn locations_derive_both_directories_from_the_profile() {
+    let saved: Vec<_> = ["APPDATA", "LOCALAPPDATA", "USERPROFILE", "HOME"]
+      .into_iter()
+      .map(|name| (name, std::env::var_os(name)))
+      .collect();
+    // Throwaway paths: on Windows the profile variables alone must decide
+    // where the configuration and the data directory live.
+    unsafe {
+      std::env::set_var("APPDATA", "E:/wish-test/roaming");
+      std::env::set_var("LOCALAPPDATA", "E:/wish-test/local");
+      std::env::set_var("USERPROFILE", "E:/wish-test");
+    }
+    let (config, data) = locations().expect("a profile");
+    if cfg!(windows) {
+      assert_eq!(config, PathBuf::from("E:/wish-test/roaming/wish-agent"));
+      assert_eq!(data, PathBuf::from("E:/wish-test/local/wish-agent/data"));
+    }
+    for (name, value) in saved {
+      match value {
+        Some(value) => unsafe { std::env::set_var(name, value) },
+        None => unsafe { std::env::remove_var(name) },
+      }
+    }
+  }
 }
