@@ -736,9 +736,11 @@ async fn execute_subagent_tool(
         .get("agent_type")
         .and_then(Value::as_str)
         .unwrap_or("general-purpose");
+      // Depth is decided in launch(), from the parent session's own metadata;
+      // spawn records it once the limit check has passed.
       let agent_id = app
         .subagents
-        .spawn(parent_session.to_owned(), agent_type.to_owned(), prompt.to_owned(), description.to_owned())
+        .spawn(parent_session.to_owned(), agent_type.to_owned(), prompt.to_owned(), description.to_owned(), 0)
         .await;
       let launch = subagents::launch(
         app.clone(),

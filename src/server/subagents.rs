@@ -20,6 +20,8 @@ pub struct AgentRecord {
   pub prompt: String,
   pub description: String,
   pub status: String,
+  /// Delegation depth: 1 under a root session, one more under a subagent.
+  pub depth: usize,
 }
 
 /// Manages the pool and the registry of subagents.
@@ -46,9 +48,18 @@ impl SubagentManager {
     agent_type: String,
     prompt: String,
     description: String,
+    depth: usize,
   ) -> String {
     let id = format!("agent-{}", self.counter.fetch_add(1, Ordering::Relaxed));
-    let record = AgentRecord { id: id.clone(), parent_session, agent_type, prompt, description, status: "queued".into() };
+    let record = AgentRecord {
+      id: id.clone(),
+      parent_session,
+      agent_type,
+      prompt,
+      description,
+      status: "queued".into(),
+      depth,
+    };
     self.records.lock().await.insert(id.clone(), record);
     id
   }
@@ -57,6 +68,11 @@ impl SubagentManager {
     self.records.lock().await.get(id).cloned()
   }
 
+  pub async fn set_depth(&self, id: &str, depth: usize) {
+    if let Some(record) = self.records.lock().await.get_mut(id) {
+      record.depth = depth;
+    }
+  }
   pub async fn update_status(&self, id: &str, status: &str) {
     if let Some(record) = self.records.lock().await.get_mut(id) {
       record.status = status.to_owned();
@@ -113,6 +129,11 @@ pub fn get_specifications(manager: &SubagentManager) -> Vec<crate::protocol::Too
 }
 
 /// Spawns the subagent session and schedules its run; completion notifies the parent.
+/// Attenuation: a subagent works inside the parent's working directory, without
+/// `ask_user` (nobody is watching to answer), without MCP, skills-over-bridge,
+/// peer sessions or web search, and - for explore agents - without a shell at
+/// all, under the read-only permission mode. Delegation depth is bounded by the
+/// manager's `max_depth`.
 pub async fn launch(
   app: Arc<App>,
   parent_id: String,
@@ -123,6 +144,28 @@ pub async fn launch(
 ) -> Result<Value, String> {
   let manager = app.subagents.clone();
   manager.update_status(&agent_id, "starting").await;
+  let parent = app
+    .get_session(&parent_id)
+    .await
+    .map_err(|error| format!("parent session is unavailable: {error}"))?;
+  let descriptor = parent.get_descriptor();
+  // Depth rides the session's metadata: a root session is 0, a subagent one more.
+  let (parent_depth, cwd) = {
+    let session = parent.session.lock().await;
+    let depth = session
+      .get_metadata()["subagent"]["depth"]
+      .as_u64()
+      .unwrap_or(0) as usize;
+    (depth, descriptor.cwd.clone())
+  };
+  let depth = parent_depth + 1;
+  manager.set_depth(&agent_id, depth).await;
+  if parent_depth >= manager.max_depth {
+    return Err(format!(
+      "delegation depth limit reached ({}); run the task in this session instead",
+      manager.max_depth
+    ));
+  }
   let provider_id = {
     let configuration = app.config_file.lock().await;
     if configuration.config.defaults.provider.is_empty() {
@@ -131,20 +174,36 @@ pub async fn launch(
       configuration.config.defaults.provider.clone()
     }
   };
-  let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
-  let mut config = crate::session::SessionConfig::new("");
+  let model = {
+    let configuration = app.config_file.lock().await;
+    if configuration.config.defaults.model.is_empty() { String::new() } else { configuration.config.defaults.model.clone() }
+  };
+  let mut config = crate::session::SessionConfig::new(model);
   config.tools = Vec::new();
+  // Explore agents only read; general subagents act, but none may ask the user.
   let read_only = agent_type == "explore";
-  let _ = read_only;
+  config.permission = if read_only {
+    crate::session::PermissionMode::ReadOnly
+  } else {
+    crate::session::PermissionMode::Operate
+  };
   let slot = app
     .create_session(crate::server::session::CreateSession {
       initial_messages: Vec::new(),
+      initial_origins: Vec::new(),
       name: format!("subagent {agent_id}: {description}"),
       provider: provider_id.clone(),
       config,
       cwd,
-      shell: !read_only,
-      metadata: json!({"subagent": {"id": agent_id, "parent": parent_id}}),
+      metadata: json!({"subagent": {"id": agent_id, "parent": parent_id, "depth": depth}}),
+      tools: crate::server::session::ToolChanges {
+        shell: Some(!read_only),
+        ask_user: Some(false),
+        mcp: Some(false),
+        web_search: Some(false),
+        skills: Some(false),
+        sessions: Some(false),
+      },
     })
     .await
     .map_err(|error| format!("subagent session create failed: {error}"))?;
@@ -155,14 +214,12 @@ pub async fn launch(
     metadata: json!({"source": "subagent", "agent_id": agent_id}),
     content: vec![crate::protocol::ContentBlock::Text { text: prompt }],
   };
-  let owner = slot.clone();
-  let entry = crate::server::error::blocking(move || {
-    Ok(owner.handle.enqueue_message(message)?)
-  })
-  .await
-  .map_err(|error| format!("subagent enqueue failed: {error}"))?;
+  let entry = slot
+    .enqueue(message)
+    .await
+    .map_err(|error| format!("subagent enqueue failed: {error}"))?;
   let _ = app.events.send(json!({"type": "session_changed", "id": session_id}));
-  crate::server::http::content::schedule(app.clone(), slot.clone());
+  slot.schedule(&app);
   // Completion watcher: when the session idles with no queued input, deliver to the parent.
   let watcher_app = app.clone();
   let watcher_slot = slot.clone();
@@ -180,7 +237,9 @@ pub async fn launch(
         drop(session);
         let descriptor = watcher_slot.get_descriptor();
         let summary = format!(
-          "session: {}\nname: {}\nmessages processed; open the session to read the transcript.",
+          "session: {}
+name: {}
+messages processed; open the session to read the transcript.",
           descriptor.id, descriptor.name
         );
         manager.update_status(&watcher_agent, "completed").await;
@@ -189,7 +248,7 @@ pub async fn launch(
       }
     }
   });
-  Ok(json!({"agent_id": agent_id, "session_id": session_id, "entry": entry, "status": "background"}))
+  Ok(json!({"agent_id": agent_id, "session_id": session_id, "entry": entry, "status": "background", "depth": depth}))
 }
 
 /// Delivers a finished subagent's summary to its parent session as a Developer message.
@@ -202,13 +261,7 @@ async fn deliver_to_parent(app: &Arc<App>, parent_id: &str, agent_id: &str, summ
       text: format!("Subagent {agent_id} finished.\n{summary}"),
     }],
   };
-  let _ = crate::server::error::blocking({
-    let parent = parent.clone();
-    move || Ok(parent.handle.enqueue_message(message)?)
-  })
-  .await;
+  let _ = parent.enqueue(message).await;
   let _ = app.events.send(json!({"type": "session_changed", "id": parent_id}));
-  if let Ok(parent_slot) = app.get_session(parent_id).await {
-    crate::server::http::content::schedule(app.clone(), parent_slot);
-  }
+  parent.schedule(app);
 }

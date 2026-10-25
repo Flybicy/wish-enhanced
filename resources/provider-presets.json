@@ -354,7 +354,16 @@
           "base_url": "https://api.z.ai/api/paas/v4",
           "path": "/chat/completions",
           "auth": "bearer",
-          "models": {},
+          "models": {
+            "glm-5.3-flash": {
+              "input_modalities": [
+                "text",
+                "image"
+              ],
+              "context_window": 131072,
+              "max_output_tokens": 65536
+            }
+          },
           "headers": {},
           "credentials": {},
           "credentials_env": {},
@@ -370,7 +379,16 @@
           "base_url": "https://api.z.ai/api/anthropic",
           "path": "/v1/messages",
           "auth": "bearer",
-          "models": {},
+          "models": {
+            "glm-5.3-flash": {
+              "input_modalities": [
+                "text",
+                "image"
+              ],
+              "context_window": 131072,
+              "max_output_tokens": 65536
+            }
+          },
           "headers": {},
           "credentials": {},
           "credentials_env": {},
@@ -406,7 +424,16 @@
           "base_url": "https://api.z.ai/api/coding/paas/v4",
           "path": "/chat/completions",
           "auth": "bearer",
-          "models": {},
+          "models": {
+            "glm-5.3-flash": {
+              "input_modalities": [
+                "text",
+                "image"
+              ],
+              "context_window": 131072,
+              "max_output_tokens": 65536
+            }
+          },
           "headers": {},
           "credentials": {},
           "credentials_env": {},
@@ -423,7 +450,16 @@
           "base_url": "https://api.z.ai/api/anthropic",
           "path": "/v1/messages",
           "auth": "bearer",
-          "models": {},
+          "models": {
+            "glm-5.3-flash": {
+              "input_modalities": [
+                "text",
+                "image"
+              ],
+              "context_window": 131072,
+              "max_output_tokens": 65536
+            }
+          },
           "headers": {},
           "credentials": {},
           "credentials_env": {},
@@ -456,7 +492,16 @@
           "base_url": "https://open.bigmodel.cn/api/paas/v4",
           "path": "/chat/completions",
           "auth": "bearer",
-          "models": {},
+          "models": {
+            "glm-5.3-flash": {
+              "input_modalities": [
+                "text",
+                "image"
+              ],
+              "context_window": 131072,
+              "max_output_tokens": 65536
+            }
+          },
           "headers": {},
           "credentials": {},
           "credentials_env": {},
@@ -472,7 +517,16 @@
           "base_url": "https://open.bigmodel.cn/api/anthropic",
           "path": "/v1/messages",
           "auth": "bearer",
-          "models": {},
+          "models": {
+            "glm-5.3-flash": {
+              "input_modalities": [
+                "text",
+                "image"
+              ],
+              "context_window": 131072,
+              "max_output_tokens": 65536
+            }
+          },
           "headers": {},
           "credentials": {},
           "credentials_env": {},
@@ -509,7 +563,16 @@
           "base_url": "https://open.bigmodel.cn/api/coding/paas/v4",
           "path": "/chat/completions",
           "auth": "bearer",
-          "models": {},
+          "models": {
+            "glm-5.3-flash": {
+              "input_modalities": [
+                "text",
+                "image"
+              ],
+              "context_window": 131072,
+              "max_output_tokens": 65536
+            }
+          },
           "headers": {},
           "credentials": {},
           "credentials_env": {},
@@ -527,7 +590,16 @@
           "base_url": "https://open.bigmodel.cn/api/anthropic",
           "path": "/v1/messages",
           "auth": "bearer",
-          "models": {},
+          "models": {
+            "glm-5.3-flash": {
+              "input_modalities": [
+                "text",
+                "image"
+              ],
+              "context_window": 131072,
+              "max_output_tokens": 65536
+            }
+          },
           "headers": {},
           "credentials": {},
           "credentials_env": {},
@@ -545,7 +617,16 @@
           "base_url": "https://open.bigmodel.cn/api/v1",
           "path": "/responses",
           "auth": "bearer",
-          "models": {},
+          "models": {
+            "glm-5.3-flash": {
+              "input_modalities": [
+                "text",
+                "image"
+              ],
+              "context_window": 131072,
+              "max_output_tokens": 65536
+            }
+          },
           "headers": {},
           "credentials": {},
           "credentials_env": {},
@@ -1500,7 +1581,10 @@
           "path": "/chat/completions",
           "auth": "bearer",
           "models": {},
-          "headers": {"originator": "codex_cli_rs", "user-agent": "codex_cli_rs/0.156.1"},
+          "headers": {
+            "originator": "codex_cli_rs",
+            "user-agent": "codex_cli_rs/0.156.1"
+          },
           "credentials": {},
           "credentials_env": {},
           "model_list": "openai_models",
@@ -1516,7 +1600,13 @@
           "path": "/responses",
           "auth": "bearer",
           "models": {},
-          "headers": {"originator": "codex_cli_rs", "user-agent": "codex_cli_rs/0.156.1", "session-id": "{session}", "thread-id": "{session}", "x-client-request-id": "{session}"},
+          "headers": {
+            "originator": "codex_cli_rs",
+            "user-agent": "codex_cli_rs/0.156.1",
+            "session-id": "{session}",
+            "thread-id": "{session}",
+            "x-client-request-id": "{session}"
+          },
           "credentials": {},
           "credentials_env": {},
           "model_list": "openai_models",
@@ -1556,7 +1646,12 @@
           "path": "/responses",
           "auth": "bearer",
           "models": {},
-          "headers": {"session-id": "{session}", "thread-id": "{session}", "x-client-request-id": "{session}", "user-agent": "codex_cli_rs/0.156.1"},
+          "headers": {
+            "session-id": "{session}",
+            "thread-id": "{session}",
+            "x-client-request-id": "{session}",
+            "user-agent": "codex_cli_rs/0.156.1"
+          },
           "credentials": {},
           "credentials_env": {},
           "model_list": "openai_codex_models",
@@ -2778,7 +2873,10 @@
           "path": "/chat/completions",
           "auth": "bearer",
           "models": {},
-          "headers": {"x-opencode-session": "{session}", "user-agent": "wish/0.1.0"},
+          "headers": {
+            "x-opencode-session": "{session}",
+            "user-agent": "wish/0.1.0"
+          },
           "credentials": {},
           "credentials_env": {},
           "model_list": "openai_models",
@@ -2794,7 +2892,10 @@
           "path": "/responses",
           "auth": "bearer",
           "models": {},
-          "headers": {"x-opencode-session": "{session}", "user-agent": "wish/0.1.0"},
+          "headers": {
+            "x-opencode-session": "{session}",
+            "user-agent": "wish/0.1.0"
+          },
           "credentials": {},
           "credentials_env": {},
           "model_list": "openai_models",
