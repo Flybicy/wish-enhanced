@@ -2,7 +2,8 @@
 //! JSON-RPC 2.0 with newline-delimited frames over the child's stdin and stdout.
 //! A mid-call disconnect yields `ToolOutcome::Unknown`: the external effect is unknown.
 
-use crate::executor::tool::ToolOutcome;
+use crate::executor::tool::ToolExecutor;
+use crate::session::ToolOutcome;
 use crate::protocol::Tool;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;

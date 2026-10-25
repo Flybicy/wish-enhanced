@@ -9,7 +9,8 @@ use crate::server::{
   data_dir::DataDir,
   error::{ApiError, blocking},
   management::ManagementStore,
-  mcp::{McpHub, bridge::Bridge},
+  bridge::Bridge,
+  mcp::McpHub,
   provider::{self, Provider, Providers, read_secret},
   search::{PreparedSearch, SearchHub},
   session::{CreateSession, Descriptor, SessionSlot, ToolSwitches},
@@ -167,9 +168,8 @@ impl App {
     let memory = if config.memory.enabled {
       let path = data_dir.root().join("memory.sqlite");
       Some(Arc::new(
-        blocking(move || crate::session::memory::MemoryStore::open(path))
-          .await
-          .map_err(ApiError::internal)?,
+        blocking(move || crate::session::memory::MemoryStore::open(path).map_err(ApiError::internal))
+          .await?,
       ))
     } else {
       None

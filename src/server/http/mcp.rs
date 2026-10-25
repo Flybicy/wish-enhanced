@@ -32,7 +32,7 @@ async fn bridge_session(
     .and_then(|value| value.strip_prefix("Bearer "));
   // A shell holding a token belongs to a session that is open, so there is nothing to load.
   let slot = app.sessions.lock().await.get(id).cloned();
-  let Some(slot) = slot.filter(|slot| Some(slot.mcp_token.as_str()) == supplied) else {
+  let Some(slot) = slot.filter(|slot| Some(slot.bridge_token.as_str()) == supplied) else {
     return Err(ApiError::unauthorized());
   };
   slot.require_live()?;

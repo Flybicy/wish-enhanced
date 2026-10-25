@@ -14,7 +14,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Where the session a bridge request speaks for finds skills, when its skills switch is on.
@@ -237,9 +237,9 @@ pub async fn install(
     return Err(ApiError::bad_request("source is not a skill: missing '---' frontmatter"));
   }
   let fallback = crate::server::skills::declared_name(&text)
-    .or_else(|| sanitize_name(&last_segment).map(str::to_owned))
+    .or_else(|| sanitize_name(&last_segment))
     .unwrap_or_else(|| "skill".into());
-  let name = sanitize_name(requested.as_deref().unwrap_or(&fallback))
+  let name = sanitize_name(requested.as_deref().unwrap_or(fallback.as_str()))
     .ok_or_else(|| ApiError::bad_request("skill name has no usable characters"))?;
 
   blocking(move || {
@@ -268,7 +268,7 @@ fn looks_like_zip(bytes: &[u8]) -> bool {
 /// scratch directory beside the target, unpacks it with the OS extractor,
 /// confirms a SKILL.md is present and that its folder did not escape the scratch
 /// tree, then moves the skill into place. Refuses to overwrite an existing skill.
-fn install_archive(target: &Path, name: &str, archive: &[u8]) -> Result<Json<Value>, ApiError> {
+fn install_archive(target: &std::path::Path, name: &str, archive: &[u8]) -> Result<Json<Value>, ApiError> {
   std::fs::create_dir_all(target).map_err(ApiError::internal)?;
   let dest = target.join(name);
   if dest.exists() {
@@ -317,7 +317,7 @@ fn install_archive(target: &Path, name: &str, archive: &[u8]) -> Result<Json<Val
 /// The skill folder inside an unpacked archive: the unpack root when it holds a
 /// SKILL.md directly, or its sole top-level subfolder when that one does. Any
 /// other shape (no SKILL.md, or several top folders) returns None.
-fn locate_skill_root(dir: &Path) -> Option<PathBuf> {
+fn locate_skill_root(dir: &std::path::Path) -> Option<PathBuf> {
   if dir.join("SKILL.md").is_file() {
     return Some(dir.to_owned());
   }
@@ -337,7 +337,7 @@ fn locate_skill_root(dir: &Path) -> Option<PathBuf> {
 /// tar.exe (bsdtar/libarchive, which reads zip and refuses path-traversal
 /// entries) in System32; other platforms use `tar` on PATH. No zip crate is
 /// pulled in, keeping the build lean.
-fn extract_zip(zip: &Path, dest: &Path) -> Result<(), ApiError> {
+fn extract_zip(zip: &std::path::Path, dest: &std::path::Path) -> Result<(), ApiError> {
   let program = tar_program();
   let mut command = std::process::Command::new(&program);
   command.arg("-xf").arg(zip).arg("-C").arg(dest);

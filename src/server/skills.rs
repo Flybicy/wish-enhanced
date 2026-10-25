@@ -440,7 +440,9 @@ impl SkillSearchTool {
       let Some(skill) = self.skills.iter().find(|skill| skill.name == name) else {
         return ToolOutcome::Failed(format!("no skill named {name}"));
       };
-      let shown = show(skill).map_err(|e| ToolOutcome::Failed(e.to_string()))?;
+      let Ok(shown) = show(skill) else {
+        return ToolOutcome::Failed("could not read the skill's SKILL.md".into());
+      };
       return ToolOutcome::Success(serde_json::json!({
         "name": shown.name,
         "description": shown.description,
@@ -450,9 +452,10 @@ impl SkillSearchTool {
       }));
     }
     let query = call.arguments.get("query").and_then(serde_json::Value::as_str);
+    let owned: Vec<&Skill> = self.skills.iter().collect();
     let listed: Vec<&Skill> = match query {
-      Some(text) => find(&self.skills, text),
-      None => self.skills.iter().collect(),
+      Some(text) => find(&owned, text),
+      None => owned,
     };
     let items: Vec<serde_json::Value> = listed
       .iter()

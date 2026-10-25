@@ -2,6 +2,7 @@
 //! token makes (see [`web`]), cross-origin rules and the bearer token. Everything lives under
 //! `/api` except the unauthenticated `/health` and `/version`; other paths are the web app's.
 mod ask;
+mod bridge;
 mod config;
 pub(crate) mod content;
 mod directories;
@@ -302,15 +303,6 @@ fn admission(
       } else {
         Admission::Allow
       }
-  if let Some(token) = &app.bearer_token {
-    let supplied = request
-      .headers()
-      .get("authorization")
-      .and_then(|h| h.to_str().ok())
-      .and_then(|h| h.strip_prefix("Bearer "));
-    if supplied != Some(token.as_str()) {
-      return (StatusCode::UNAUTHORIZED, Json(json!({"error":{"message":"unauthorized"}})))
-        .into_response();
     }
   }
 }

@@ -321,7 +321,7 @@ impl ToolExecutor for SessionTools {
         "generation": slot.get_schedule_epoch(),
         "approval": approval,
         "outcome": outcome_name(&outcome),
-        "time": crate::session::statistics::Timestamp::now().0,
+        "time": crate::utils::time::Timestamp::now().0,
         "args": preview(&call.arguments),
       }));
     }
@@ -608,7 +608,7 @@ fn preview(arguments: &Value) -> String {
 #[cfg(test)]
 mod tests {
   use super::{denied_read_only, has_side_effects, is_read_only, mask_credentials, preview, redact};
-  use crate::executor::tool::ToolOutcome;
+  use crate::session::ToolOutcome;
   use serde_json::json;
 
   #[test]

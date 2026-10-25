@@ -37,8 +37,6 @@ pub struct Config {
   /// How much of the usage records is kept.
   pub usage: UsageConfig,
   pub defaults: Defaults,
-  /// Prompt-injection skill files under the data directory.
-  pub skills: SkillsConfig,
   /// Observational memory (observations and reflections across sessions).
   pub memory: MemorySettings,
   /// In-process subagent delegation.
@@ -48,8 +46,6 @@ pub struct Config {
 }
 
 
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields)]
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct MemorySettings {
@@ -293,7 +289,7 @@ impl Default for Defaults {
         trigger_tokens: 272_000,
         target_tokens: 96_000,
         segment_tokens: 48_000,
-        estimator: crate::executor::model::tokens::TokenEstimator::default(),
+        estimator: crate::session::TokenEstimator::default(),
       }),
     }
   }
@@ -324,7 +320,6 @@ impl Default for Config {
       skills: SkillsConfig::default(),
       usage: UsageConfig::default(),
       defaults: Defaults::default(),
-      skills: SkillsConfig::default(),
       memory: MemorySettings::default(),
       subagents: SubagentsSettings::default(),
       workspace_history: WorkspaceHistorySettings::default(),
@@ -334,6 +329,7 @@ impl Default for Config {
 
 #[cfg(test)]
 mod tests {
+  use serde_json::json;
   use super::*;
 
   // The capability sections must default-fill when a config predates them, so an

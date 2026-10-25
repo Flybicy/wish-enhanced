@@ -41,7 +41,7 @@ Source: "..\dist\wish\python\*"; DestDir: "{app}\python"; Flags: ignoreversion r
 Source: "..\dist\wish\node\*"; DestDir: "{app}\node"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\dist\wish\git\*"; DestDir: "{app}\git"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Document skills seeded into the data directory the server scans by default.
-Source: "..\installer\skills\*"; DestDir: "{userdocs}\Wish\data\skills"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\installer\skills\*"; DestDir: "{userdocs}\Wish\skills"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\dist\wish\web\*"; DestDir: "{app}\web"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\dist\wish\niubash\*"; DestDir: "{app}\niubash"; Flags: ignoreversion recursesubdirs createallsubdirs
 

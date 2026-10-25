@@ -369,7 +369,7 @@ pub async fn fork(
   for entry_id in &prefix {
     let entry = session.reader().get_entry(*entry_id)?.ok_or(SessionError::InvalidEntry(*entry_id))?;
     initial_origins.push(entry.origin);
-    partial_messages.push(entry.message);
+    partial_messages.push(entry.message.clone());
   }
   // A partial fork carries only the prefix's messages, rendered as they are stored.
   if body.entry_id.is_some() {
@@ -386,6 +386,8 @@ pub async fn fork(
       ask_user: Some(descriptor.tools.ask_user),
       mcp: Some(descriptor.tools.mcp),
       web_search: Some(descriptor.tools.web_search),
+      skills: Some(descriptor.tools.skills),
+      sessions: Some(descriptor.tools.sessions),
     },
     config,
     metadata: session.get_metadata().clone(),

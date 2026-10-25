@@ -79,11 +79,6 @@ pub async fn models(
   Path(id): Path<String>,
   Query(query): Query<CatalogQuery>,
 ) -> Result<Json<Value>, ApiError> {
-pub async fn models(
-  State(app): State<Arc<App>>,
-  Path(id): Path<String>,
-  Query(query): Query<CatalogQuery>,
-) -> Result<Json<Value>, ApiError> {
   catalog_page(&app, &*app.get_provider(&id)?, query).await
 }
 /// A provider not saved yet, as the first-run setup holds it.
@@ -195,7 +190,7 @@ async fn draft_catalog(
     .filter(|base| !base.is_empty())
     .unwrap_or_else(|| draft.base_url.clone());
   let proxy = app.config_file.lock().await.config.proxy.clone();
-  let provider = crate::server::provider::Provider::build(draft, &proxy)?;
+  let provider = crate::server::provider::Provider::build("draft".into(), draft, &proxy)?;
   let mut page = ModelListQuery::first(&base, &path);
   page.unauthenticated = matches!(provider.config.auth, crate::server::provider::Auth::None);
   page.cursor = cursor;

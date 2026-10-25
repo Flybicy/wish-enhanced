@@ -16,6 +16,7 @@
 
 mod app;
 mod blobs;
+mod bridge;
 mod caption;
 mod codex_login;
 mod compaction_item;
@@ -216,7 +217,7 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
   Ok(())
 }
 
-const HELP_TEXT: &str = "wish [--config <config.json>] [--port <port>] [--no-window] [--window] [--browser] [--open <session-id>]
+const HELP_TEXT: &str = r"wish [--config <config.json>] [--port <port>] [--no-window] [--window] [--browser] [--open <session-id>]
 wish mcp <list|describe|call> ... talks to a running server's MCP bridge
 One HTTP service for providers and sessions, with a web interface.
 

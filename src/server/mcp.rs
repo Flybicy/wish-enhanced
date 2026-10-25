@@ -14,7 +14,6 @@
 //! session use one instance, for servers known to keep none. An instance nobody has called for
 //! `idle_timeout` seconds is closed, and started again on the next call.
 
-pub mod bridge;
 pub mod cli;
 
 use crate::mcp::{Connection, Endpoint, McpError};
@@ -257,7 +256,7 @@ struct ServerCatalog {
 
 pub struct McpHub {
   /// How sessions' shells reach this server's MCP bridge.
-  pub bridge: bridge::Bridge,
+  pub bridge: crate::server::bridge::Bridge,
   settings: RwLock<Settings>,
   instances: Mutex<HashMap<InstanceKey, Arc<Instance>>>,
   catalogs: Arc<Mutex<HashMap<String, ServerCatalog>>>,
@@ -268,7 +267,7 @@ impl McpHub {
     config: McpConfig,
     proxy: ProxyConfig,
     default_cwd: PathBuf,
-    bridge: bridge::Bridge,
+    bridge: crate::server::bridge::Bridge,
   ) -> Self {
     Self {
       bridge,

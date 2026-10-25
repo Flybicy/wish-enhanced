@@ -67,7 +67,7 @@ pub async fn list(
   Query(listing): Query<Listing>,
 ) -> Result<Json<Value>, ApiError> {
   let session = app.get_session(&id).await?;
-  let root = session.descriptor.read().unwrap().cwd.clone();
+  let root = session.get_descriptor().cwd.clone();
   if !root.is_dir() {
     return Err(ApiError::bad_request("the working directory no longer exists"));
   }

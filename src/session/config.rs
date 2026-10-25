@@ -120,7 +120,8 @@ impl Session {
       let mut config = transaction.record.config.clone();
       config.permission = mode;
       transaction.record.config = config.clone();
-      transaction.record_event(SessionEvent::ConfigUpdated(Box::new(config)))
+      transaction.record_event(SessionEvent::ConfigUpdated(Box::new(config)))?;
+      Ok(())
     })
   }
 }

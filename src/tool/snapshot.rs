@@ -2,7 +2,8 @@
 //! The shadow repo lives under the session data directory; the user's own `.git` is
 //! never touched. Undo on a dirty workspace is refused, not guessed.
 
-use crate::executor::tool::{ToolCall, ToolExecutor, ToolOutcome};
+use crate::executor::tool::ToolExecutor;
+use crate::session::{ToolCall, ToolOutcome};
 use crate::protocol::Tool;
 use serde_json::json;
 use std::path::{Path, PathBuf};

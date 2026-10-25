@@ -196,6 +196,8 @@ pub async fn launch(
       config,
       cwd,
       metadata: json!({"subagent": {"id": agent_id, "parent": parent_id, "depth": depth}}),
+      created_by: None,
+      folder: None,
       tools: crate::server::session::ToolChanges {
         shell: Some(!read_only),
         ask_user: Some(false),
@@ -225,11 +227,11 @@ pub async fn launch(
   let watcher_slot = slot.clone();
   let watcher_parent = parent_id.clone();
   let watcher_agent = agent_id.clone();
-  app.tasks.spawn(async move {
+  app.lifecycle.tasks.spawn(async move {
     loop {
       tokio::time::sleep(std::time::Duration::from_secs(2)).await;
       let session = watcher_slot.session.lock().await;
-      if !watcher_slot.control.lock().unwrap().is_some()
+      if !watcher_slot.get_status().status.running
         && session.get_state().is_stable()
       {
         // Idle. Deliver a completion notice with the descriptor summary; the full

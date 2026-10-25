@@ -7,4 +7,5 @@ pub mod mcp;
 pub mod shell;
 pub mod snapshot;
 pub mod view_image;
+pub mod web;
 pub mod web_search;
