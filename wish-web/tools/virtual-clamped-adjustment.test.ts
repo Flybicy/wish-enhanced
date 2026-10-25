@@ -8,17 +8,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 // pnpm stores patched instances under a content-hashed directory; resolve it
 // by prefix so the canary survives re-installations and patch rehashes.
+// pnpm ≤11 names the dir `…@3.17.9_patch_hash=…`, pnpm 12 `…@3.17_<hash>`;
+// match either, requiring the patch marker so an unpatched twin cannot win.
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const pnpmDir = join(repoRoot, 'node_modules', '.pnpm');
 const virtualCoreDist = join(
   pnpmDir,
-  readdirSync(pnpmDir).find((name) => name.startsWith('@tanstack+virtual-core@3.17.9'))!,
+  readdirSync(pnpmDir).find((name) => /^@tanstack\+virtual-core@3\.17(\.\d+)?_/.test(name))!,
   'node_modules', '@tanstack', 'virtual-core', 'dist', 'esm', 'index.js',
 );
-const { Virtualizer } = await import(virtualCoreDist);
+const { Virtualizer } = await import(pathToFileURL(virtualCoreDist).href);
 
 function makeVirtualizer(t?: { offsetCb?: (offset: number) => void }) {
   const el: { scrollHeight: number; clientHeight: number; scrollTop?: number; scrollTo(): void } =

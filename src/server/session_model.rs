@@ -82,26 +82,32 @@ impl SessionModel {
   pub fn new(provider: Arc<Provider>, image_dir: PathBuf, client: ModelClient) -> Self {
     Self { provider, client, image_dir, rejected: AtomicBool::new(false) }
   }
-  async fn prepare(&self, request: &Request) -> Result<(Request, bool), Error> {
+  async fn prepare(&self, request: &Request, route_vision: bool) -> Result<(Request, bool), Error> {
     let mut request = request.clone();
     apply_agent_instructions(&mut request.conversation, &request.tools);
     compaction_item::project(&mut request.conversation, &self.provider.id);
     // File writes run outside the async runtime workers; validation below performs no I/O.
-    let (mut messages, model, provider, image_dir, rejected) = (
+    let (mut messages, mut model, provider, image_dir, rejected) = (
       request.conversation,
       request.model.clone(),
       self.provider.clone(),
       self.image_dir.clone(),
       self.rejected.load(Ordering::Relaxed),
     );
-    let (conversation, images) = tokio::task::spawn_blocking(move || {
+    let (conversation, images, model) = tokio::task::spawn_blocking(move || {
       let models = &provider.config.models;
+      if route_vision && let Some(to) =
+        vision_target(models, &provider.config.vision_model, &model, &messages)
+      {
+        model = to;
+      }
       project_images(models, &model, &image_dir, rejected, &mut messages, true)
-        .map(|images| (messages, images))
+        .map(|images| (messages, images, model))
     })
     .await
     .map_err(|e| Error::Build(e.to_string()))??;
     request.conversation = conversation;
+    request.model = model;
     Ok((request, images))
   }
   fn with_model_context(&self, error: Error, model: &str) -> Error {
@@ -115,6 +121,38 @@ impl SessionModel {
       other => other,
     }
   }
+}
+/// The model an image-bearing request calls instead of the session's own: the provider's
+/// `vision_model`, but only when that request carries an image, the session's model declares no
+/// image input, and the vision model does not declare the same lack. A model absent from `models`
+/// reads as accepting images, matching [`project_images`].
+fn vision_target(
+  models: &BTreeMap<String, Value>,
+  vision_model: &Option<String>,
+  model: &str,
+  messages: &[Message],
+) -> Option<String> {
+  let target = vision_model.as_ref()?;
+  if target == model || !messages.iter().any(message_has_image) {
+    return None;
+  }
+  let supports_images = |name: &str| {
+    models
+      .get(name)
+      .and_then(|value| value["input_modalities"].as_array())
+      .is_none_or(|values| values.iter().any(|value| value == "image"))
+  };
+  (!supports_images(model) && supports_images(target)).then(|| target.clone())
+}
+fn message_has_image(message: &Message) -> bool {
+  let content = match message {
+    Message::User { content, .. }
+    | Message::Assistant { content, .. }
+    | Message::System { content, .. }
+    | Message::Developer { content, .. } => content,
+    _ => return false,
+  };
+  content.iter().any(|block| matches!(block, ContentBlock::Image { .. }))
 }
 /// Replaces each image with a reference to its blob, followed by the image itself unless the
 /// model's declared capabilities or the upstream refuse images. With `save`, the images are stored
@@ -224,7 +262,7 @@ impl ModelCaller for SessionModel {
     self.client.validate_request(&request)
   }
   async fn count_tokens(&self, request: &Request) -> Result<Option<TokenCount>, Error> {
-    let (request, _) = self.prepare(request).await?;
+    let (request, _) = self.prepare(request, true).await?;
     ModelCaller::count_tokens(&self.client, &request)
       .await
       .map_err(|error| self.with_model_context(error, &request.model))
@@ -245,7 +283,8 @@ impl ModelCaller for SessionModel {
       cache: None,
     };
     projected.conversation = request.conversation.clone();
-    let (projected, _) = self.prepare(&projected).await?;
+    // Compaction is text work; the vision model never gets it.
+    let (projected, _) = self.prepare(&projected, false).await?;
     let mut compaction = self
       .client
       .compact_upstream(&UpstreamCompactionRequest {
@@ -266,16 +305,81 @@ impl ModelCaller for SessionModel {
     Ok(compaction)
   }
   async fn call(&self, original: &Request) -> Result<CallResponse<Self::Stream>, Error> {
-    let (request, images) = self.prepare(original).await?;
+    let (request, images) = self.prepare(original, true).await?;
     let result = match self.client.call(&request).await {
       // Client has not handed out any event; partial stream failures never enter this branch.
       Err(error) if images && rejects_images(&error) => {
         self.rejected.store(true, Ordering::Relaxed);
-        let (request, _) = self.prepare(original).await?;
+        let (request, _) = self.prepare(original, true).await?;
         self.client.call(&request).await
       }
       result => result,
     };
     result.map_err(|error| self.with_model_context(error, &request.model))
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use serde_json::json;
+
+  fn models_json() -> BTreeMap<String, Value> {
+    serde_json::from_value(json!({
+      "text-only": {"input_modalities": ["text"]},
+      "vision": {"input_modalities": ["text", "image"]},
+    }))
+    .unwrap()
+  }
+
+  fn image_message() -> Message {
+    Message::User {
+      metadata: Value::Null,
+      content: vec![ContentBlock::Image {
+        mime_type: "image/png".into(),
+        data_base64: "aGk=".into(),
+      }],
+    }
+  }
+
+  fn text_message() -> Message {
+    Message::User { metadata: Value::Null, content: vec![ContentBlock::Text { text: "hi".into() }] }
+  }
+
+  #[test]
+  fn vision_target_swaps_when_model_lacks_images() {
+    let models = models_json();
+    let messages = vec![image_message()];
+    assert_eq!(
+      vision_target(&models, &Some("vision".into()), "text-only", &messages),
+      Some("vision".into())
+    );
+  }
+
+  #[test]
+  fn vision_target_leaves_a_model_that_takes_images() {
+    let models = models_json();
+    let messages = vec![image_message()];
+    assert_eq!(vision_target(&models, &Some("vision".into()), "vision", &messages), None);
+    // A model with no declared capabilities reads as accepting images.
+    assert_eq!(vision_target(&models, &Some("vision".into()), "unknown", &messages), None);
+  }
+
+  #[test]
+  fn vision_target_needs_images_and_a_target_that_takes_them() {
+    let models = models_json();
+    assert_eq!(
+      vision_target(&models, &Some("vision".into()), "text-only", &[text_message()]),
+      None
+    );
+    let also_text_only = json!({"also-text": {"input_modalities": ["text"]}});
+    let models: BTreeMap<String, Value> = models
+      .into_iter()
+      .chain(serde_json::from_value::<BTreeMap<String, Value>>(also_text_only).unwrap())
+      .collect();
+    assert_eq!(
+      vision_target(&models, &Some("also-text".into()), "text-only", &[image_message()]),
+      None
+    );
   }
 }

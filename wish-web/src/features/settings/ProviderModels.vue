@@ -180,6 +180,10 @@ const contextPresets=[{label:'32K',value:32768},{label:'64K',value:65536},{label
 const outputPresets=[{label:'4K',value:4096},{label:'8K',value:8192},{label:'16K',value:16384},{label:'32K',value:32768},{label:'64K',value:65536},{label:'128K',value:131072}];
 function setTokenLimit(field:'context_window_tokens'|'max_output_tokens',value:number){draft.value[field]=draft.value[field]===value?null:value;}
 const choices=computed(()=>catalog.value.map(model=>({key:model.id,title:modelLabel(model.id),search:model.id,brand:props.preset?.provider,disabled:!!props.value.models[model.id],description:props.value.models[model.id]?tr('已添加','Already added'):undefined})));
+const visionOptions=computed(()=>[
+  {value:'',label:tr('不启用（模型各自声明图片能力）','None (each model declares its own)')},
+  ...Object.keys(props.value.models).map(id=>({value:id,label:id})),
+]);
 </script>
 <template>
   <div class="models-editor">
@@ -189,6 +193,7 @@ const choices=computed(()=>catalog.value.map(model=>({key:model.id,title:modelLa
       <Hint :text="tr('编辑模型','Edit model')"><button class="btn ghost icon-only" :aria-label="tr('编辑模型配置 ','Edit model configuration ')+name" @click="edit(String(name))"><Icon name="pencil"/></button></Hint>
       <Hint :text="tr('删除模型','Delete model')"><button class="btn ghost icon-only model-remove" :aria-label="tr('删除模型 ','Delete model ')+name" @click="delete value.models[name]"><Icon name="trash-2"/></button></Hint>
     </div>
+    <label v-if="Object.keys(value.models).length" class="vision-field">{{tr('识图模型','Vision model')}}<SelectField mobile-page :model-value="value.vision_model??''" :options="visionOptions" @update:model-value="value.vision_model=$event||undefined"/><span class="vision-hint">{{tr('会话模型不支持图片时，带图请求改走它。','Image-bearing requests call it when the session model lacks image input.')}}</span></label>
     <Modal compact :before-close="isMobile?confirmModelReturn:undefined" :content-class="isMobile?'settings-editor mobile-settings-page':'settings-editor'" :page="isMobile" :open="editing" :title="originalId?tr('编辑模型','Edit model'):tr('添加模型','Add model')" @close="editing=false">
 
       <div class="model-form">
@@ -323,5 +328,8 @@ const choices=computed(()=>catalog.value.map(model=>({key:model.id,title:modelLa
 .effort-reset{min-height:36px;padding:6px 12px;font-size:13px}
 }
 .model-remove{color:var(--fg-subtle)}
+.vision-field{display:flex;flex-direction:column;gap:6px;padding:12px 0 2px;font-size:13.5px;font-weight:500}
+.vision-hint{font-size:12px;font-weight:400;color:var(--fg-subtle)}
+@media(min-width:900px){.vision-field{display:grid;grid-template-columns:170px minmax(0,1fr);align-items:center}.vision-hint{grid-column:2}}
 @media (hover: hover) { .model-remove:hover{color:var(--err);background:var(--err-bg)} }
 </style>

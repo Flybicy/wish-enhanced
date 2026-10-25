@@ -15,6 +15,7 @@ export interface ProviderConfig {
   credentials_env: Record<string,string>;
   headers: Record<string,string>;
   models: Record<string,Record<string,any>>;
+  vision_model?: string | null;
   model_list?: string | null;
   model_list_path?: string | null;
   model_list_base_url?: string | null;

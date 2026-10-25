@@ -58,6 +58,11 @@ pub struct ProviderConfig {
   pub model_list_base_url: Option<String>,
   #[serde(default)]
   pub models: BTreeMap<String, serde_json::Value>,
+  /// The model a request carrying images calls instead, when the session's own model declares no
+  /// image input. A name in this provider's `models`; undeclared capabilities read as supporting
+  /// images, as everywhere else.
+  #[serde(default)]
+  pub vision_model: Option<String>,
   pub protocol: String,
   pub base_url: String,
   pub path: String,

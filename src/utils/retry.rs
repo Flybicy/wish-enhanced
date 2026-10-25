@@ -24,15 +24,17 @@ pub struct RetryPolicy {
 }
 
 impl Default for RetryPolicy {
-  /// Six attempts without jitter: the waits double from 10s through 80s, and the fifth retry's
-  /// 160s is capped at 150s, so a logical call waits out at most five minutes before giving up.
+  /// Six attempts with a light jitter: the waits double from 10s through 80s, the fifth retry's
+  /// 160s is capped at 150s, and each wait is spread down to 20% so concurrent callers that
+  /// failed together do not retry in lockstep, so a logical call waits out at most five minutes
+  /// before giving up.
   fn default() -> Self {
     Self {
       max_attempts: 6,
       initial_delay_ms: 10_000,
       max_delay_ms: 150_000,
       multiplier: 2.0,
-      jitter_ratio: 0.0,
+      jitter_ratio: 0.2,
     }
   }
 }
@@ -120,11 +122,27 @@ mod tests {
   /// jitter the cadence is exact, so one logical call spends at most 10+20+40+80+150 seconds
   /// waiting between its six attempts.
   #[test]
-  fn default_backoff_doubles_then_caps() {
-    let policy = RetryPolicy::default();
+  fn backoff_doubles_then_caps_without_jitter() {
+    let policy = RetryPolicy { jitter_ratio: 0.0, ..RetryPolicy::default() };
     assert_eq!(policy.max_attempts, 6);
-    assert_eq!(policy.jitter_ratio, 0.0);
     let delays: Vec<u64> = (1..=5).map(|n| policy.calculate_backoff_ms(n, None)).collect();
     assert_eq!(delays, [10_000, 20_000, 40_000, 80_000, 150_000]);
+  }
+
+  /// The default's jitter keeps every wait inside `[delay * (1 - ratio), delay]`, never above the
+  /// unjittered cadence and never below its 20% spread.
+  #[test]
+  fn default_jitter_keeps_delays_within_the_spread() {
+    let policy = RetryPolicy::default();
+    assert!(policy.jitter_ratio > 0.0);
+    for attempt in 1..=5u32 {
+      let base = (policy.initial_delay_ms as f64 * policy.multiplier.powi(attempt as i32 - 1))
+        .min(policy.max_delay_ms as f64);
+      for _ in 0..20 {
+        let delay = policy.calculate_backoff_ms(attempt, None) as f64;
+        assert!(delay >= base * (1.0 - policy.jitter_ratio) - 1.0, "{delay} below spread for {base}");
+        assert!(delay <= base, "{delay} above base {base}");
+      }
+    }
   }
 }
