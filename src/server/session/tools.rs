@@ -43,6 +43,12 @@ pub struct ToolSwitches {
   pub mcp: bool,
   /// Searches of the web: `web_search`, answered by the configured search providers.
   pub web_search: bool,
+  /// Whether `wish skill` in the session's shell may read skills. Like `mcp`, it changes neither
+  /// the tools nor the instructions, so switching it keeps the prompt cache.
+  pub skills: bool,
+  /// Whether `wish session` in the session's shell may see, make and message other sessions and
+  /// groups. Like `mcp`, switching it keeps the prompt cache.
+  pub sessions: bool,
 }
 impl ToolSwitches {
   /// These switches with a request's changes; what it leaves out stays as it is.
@@ -52,6 +58,8 @@ impl ToolSwitches {
       ask_user: changes.ask_user.unwrap_or(self.ask_user),
       mcp: changes.mcp.unwrap_or(self.mcp),
       web_search: changes.web_search.unwrap_or(self.web_search),
+      skills: changes.skills.unwrap_or(self.skills),
+      sessions: changes.sessions.unwrap_or(self.sessions),
     }
   }
   /// Whether a tool of this name runs under these switches.
@@ -74,6 +82,21 @@ pub struct ToolChanges {
   pub ask_user: Option<bool>,
   pub mcp: Option<bool>,
   pub web_search: Option<bool>,
+  pub skills: Option<bool>,
+  pub sessions: Option<bool>,
+}
+impl From<ToolSwitches> for ToolChanges {
+  /// Every switch set as these are.
+  fn from(switches: ToolSwitches) -> Self {
+    Self {
+      shell: Some(switches.shell),
+      ask_user: Some(switches.ask_user),
+      mcp: Some(switches.mcp),
+      web_search: Some(switches.web_search),
+      skills: Some(switches.skills),
+      sessions: Some(switches.sessions),
+    }
+  }
 }
 
 pub struct SessionTools {

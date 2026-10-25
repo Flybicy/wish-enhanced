@@ -3,11 +3,14 @@
 //! `/api` except the unauthenticated `/health` and `/version`; other paths are the web app's.
 mod ask;
 mod config;
-mod content;
+pub(crate) mod content;
 mod directories;
+mod folders;
+mod groups;
 mod history;
 mod manage;
 mod mcp;
+mod peers;
 mod providers;
 mod search;
 mod sessions;
@@ -17,7 +20,7 @@ mod storage;
 mod usage;
 use crate::server::{
   app::App,
-  codex_login, presets,
+  codex_login, copilot_login, presets,
   web::{self, WebFront},
 };
 mod skills;
@@ -30,7 +33,7 @@ use axum::{
   http::{HeaderValue, Method, StatusCode, header},
   middleware::{self, Next},
   response::{IntoResponse, Response},
-  routing::{delete, get, post, put},
+  routing::{delete, get, patch, post, put},
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -43,6 +46,8 @@ pub fn build_router(app: Arc<App>, front: Arc<WebFront>) -> Router {
     .route("/storage", get(storage::storage))
     .route("/storage/sessions", get(storage::session_storage))
     .route("/storage/prune", post(storage::prune))
+    .route("/storage/detail", get(storage::detail))
+    .route("/storage/prune-usage", post(storage::prune_usage))
     .route("/usage", get(usage::global_usage))
     .route("/usage/series", get(usage::global_series))
     .route("/usage/daily", get(usage::global_daily))
@@ -67,6 +72,7 @@ pub fn build_router(app: Arc<App>, front: Arc<WebFront>) -> Router {
     .route("/providers/{id}/account", get(providers::account))
     .route("/providers/{id}/chatgpt-login", post(codex_login::start).get(codex_login::status))
     .route("/providers/{id}/chatgpt-login/complete", post(codex_login::complete))
+    .route("/providers/{id}/copilot-login", post(copilot_login::start).get(copilot_login::status))
     .route("/providers/{id}/call", post(providers::call))
     .route("/providers/{id}/count-tokens", post(providers::count))
     .route("/providers/{id}/compact", post(providers::compact))
@@ -75,6 +81,18 @@ pub fn build_router(app: Arc<App>, front: Arc<WebFront>) -> Router {
       "/sessions/{id}",
       get(sessions::get).patch(manage::update_session).delete(manage::delete_session),
     )
+    .route("/conversations", get(sessions::conversations))
+    .route("/conversations/move", post(folders::move_entries))
+    .route("/conversations/pin", post(folders::pin))
+    .route("/folders", get(folders::list).post(folders::create))
+    .route("/folders/{id}", patch(folders::rename).delete(folders::delete))
+    .route("/groups", post(groups::create))
+    .route("/groups/{id}", get(groups::get).patch(groups::update).delete(groups::delete))
+    .route("/groups/{id}/messages", get(groups::messages).post(groups::post))
+    .route("/groups/{id}/blobs", post(content::upload))
+    .route("/groups/{id}/blobs/{blob}", get(content::download))
+    .route("/groups/{id}/blobs/{blob}/meta", get(content::metadata))
+    .route("/sessions/{id}/groups", get(groups::of_session))
     .route("/sessions/{id}/fork", post(manage::fork))
     .route("/sessions/{id}/rewind", post(manage::rewind))
     .route("/sessions/{id}/context/clear", post(manage::clear_context))
@@ -114,7 +132,21 @@ pub fn build_router(app: Arc<App>, front: Arc<WebFront>) -> Router {
     // instead of the application's.
     .route("/sessions/{id}/mcp/servers", get(mcp::servers))
     .route("/sessions/{id}/mcp/tool", get(mcp::tool))
-    .route("/sessions/{id}/mcp/call", post(mcp::call));
+    .route("/sessions/{id}/mcp/call", post(mcp::call))
+    .route("/sessions/{id}/skills", get(skills::session_list))
+    .route("/sessions/{id}/skills/{name}", get(skills::session_show))
+    .route("/sessions/{id}/peers", get(peers::list).post(peers::create))
+    .route("/sessions/{id}/peers/groups", post(peers::create_group))
+    .route(
+      "/sessions/{id}/peers/{target}",
+      get(peers::show).patch(peers::configure).delete(peers::delete),
+    )
+    .route("/sessions/{id}/peers/{target}/send", post(peers::send))
+    .route("/sessions/{id}/peers/{target}/members", post(peers::add_members))
+    .route("/sessions/{id}/peers/{target}/leave", post(peers::leave))
+    .route("/skills/install", post(skills::install))
+    .route("/skills", get(skills::list))
+    .route("/skills/{name}", get(skills::show));
   Router::new()
     .nest("/api", api)
     .route("/health", get(|| async { Json(json!({"status":"ok"})) }))

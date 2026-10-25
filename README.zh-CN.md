@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <strong>运行在你自己机器上、什么都记得的 AI 智能体。</strong>
+  <strong>一个极简但开箱即用的 AI Agent Harness，采用贴合前沿模型的优秀实践。</strong>
 </p>
 
 <p align="center">
@@ -18,10 +18,8 @@
 
 ---
 
-Wish 在你掌控的电脑上运行长期存在的 AI 智能体会话。为会话指定一个工作目录和一个模型，
-它就能和你对话、执行命令、查看图片，并持续推进长时间的任务；期间交流的每一个字都会被保存下来，随时可以检索。
-你可以在桌面或手机上通过 [Wish Web 应用](https://github.com/WindustH/wish-web) 使用它，
-也可以用任何能发 HTTP 请求的工具直接调用。
+Wish 是一个运行在你自己机器上的极简、高性能 AI 智能体。可以在桌面或手机上通过
+[Web 应用](https://github.com/WindustH/wish-web) 使用，也可以调用 [HTTP API](docs/api.md)。
 
 <p align="center">
   <img src="docs/assets/screenshot-desktop-zh.png" alt="桌面端的 Wish" width="74%">
@@ -64,21 +62,19 @@ yay -S wish-agent-bin                   # Arch Linux
 brew install windusth/tap/wish-agent    # macOS 和 Linux
 ```
 
+软件包安装的命令是 `wish`，在 Arch Linux 和 Homebrew 上不能与 Tk 的 `wish` 同时安装。
+
 **2. 启动。**
 
 ```sh
-wish-agent
+wish
 ```
 
 **3. 打开 <http://127.0.0.1:8790>。** 首次使用会有一个简短的引导，帮你添加模型提供商。
 然后在首页选好工作目录，发送第一条消息即可。
 
-首次启动会为当前用户写一份配置文件（Linux 上是 `~/.config/wish-agent/config.json`，
-macOS 上在 `~/Library/Application Support/wish-agent/`，Windows 上在 `%APPDATA%\wish-agent\`），
-数据也保存在它旁边。你添加的提供商会保存在这份配置里。如果不想把 API 密钥写进文件，
-可以在启动 Wish 前把它导出为环境变量，然后在 Web 应用中填写 `${变量名}`。
-全部选项见[配置说明](docs/configuration.md)；以服务方式运行、设置访问令牌、
-从其他设备访问，见[部署指南](docs/deployment.md)。
+首次启动会为当前用户写一份配置文件（Linux 上是 `~/.config/wish-agent/config.json`），数据也保存在它旁边。
+全部选项见[配置说明](docs/configuration.md)；以服务方式运行、从其他设备访问，见[部署指南](docs/deployment.md)。
 
 ### 从源码构建
 

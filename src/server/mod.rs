@@ -7,6 +7,8 @@
 //! - `config` is the configuration file's schema, `config_file` the file as the server holds it;
 //! - `provider`, `search` and `mcp` are what a configuration builds: model providers, search
 //!   providers and MCP servers;
+//! - `groups` are chats among the user and several sessions, and `peers` is what a session sees
+//!   of other sessions and groups through `wish session`;
 //! - `management` is the index of sessions, model calls and stream samples (`sampling`), and
 //!   `data_dir` and `blobs` are the files beside it;
 //! - `web` hands out the web app beside the API and guards a server without a token;
@@ -21,12 +23,15 @@ mod config;
 mod config_file;
 #[cfg(windows)]
 mod console;
+mod copilot_login;
 mod data_dir;
 mod error;
+mod groups;
 mod http;
 mod management;
 mod mcp;
 mod model_catalog;
+mod peers;
 mod presets;
 mod provider;
 mod sampling;
@@ -37,6 +42,7 @@ mod session_model;
 mod shell_window;
 mod skills;
 mod subagents;
+mod user_dirs;
 mod web;
 
 use std::ffi::OsStr;
@@ -72,6 +78,17 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
   if args.first().map(String::as_str) == Some("mcp") {
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     let code = rt.block_on(mcp::cli::run(args[1..].to_vec()));
+    std::process::exit(code);
+  }
+  // Skills and session peers ride the same bridge: wish skill ... / wish session ...
+  if args.first().map(String::as_str) == Some("skill") {
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let code = rt.block_on(skills::cli::run(args[1..].to_vec()));
+    std::process::exit(code);
+  }
+  if args.first().map(String::as_str) == Some("session") {
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let code = rt.block_on(peers::cli::run(args[1..].to_vec()));
     std::process::exit(code);
   }
   let mut path: Option<PathBuf> = None;

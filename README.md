@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <strong>A self-hosted AI agent that works on your own machine and remembers everything.</strong>
+  <strong>A minimal yet ready-to-use AI agent harness, built on best practices for frontier models.</strong>
 </p>
 
 <p align="center">
@@ -18,12 +18,9 @@
 
 ---
 
-Wish runs long-lived AI agent sessions on a computer you control. Give a
-session a working directory and a model, and it will talk with you, run
-commands, look at images and keep going through long tasks, while every word
-it exchanges is kept and searchable. Use it from the
-[Wish web app](https://github.com/WindustH/wish-web) on desktop or phone, or
-from anything that speaks HTTP.
+Wish is a minimal, fast AI agent that runs on your own machine. Use it from
+the [web app](https://github.com/WindustH/wish-web) on desktop or phone, or over
+the [HTTP API](docs/api.md).
 
 <p align="center">
   <img src="docs/assets/screenshot-desktop.png" alt="Wish on the desktop" width="74%">
@@ -78,24 +75,24 @@ yay -S wish-agent-bin                   # Arch Linux
 brew install windusth/tap/wish-agent    # macOS and Linux
 ```
 
+The packages install the `wish` command, which can't sit beside Tk's `wish` on
+Arch Linux or Homebrew.
+
 **2. Start it.**
 
 ```sh
-wish-agent
+wish
 ```
 
 **3. Open <http://127.0.0.1:8790>.** A short first-run setup helps you add a
 model provider. Pick your working directory on the start page and send your
 first message.
 
-The first start writes a configuration file for your user
-(`~/.config/wish-agent/config.json` on Linux, `~/Library/Application
-Support/wish-agent/` on macOS, `%APPDATA%\wish-agent\` on Windows) and keeps
-its data beside it. The providers you add are saved there. To keep an API key
-out of the file, export it before starting Wish and enter it in the web app as
-`${NAME}`. See [configuration](docs/configuration.md) for every option, and
-[deployment](docs/deployment.md) for running Wish as a service, protecting it
-with a token and reaching it from other devices.
+The first start writes a configuration for your user
+(`~/.config/wish-agent/config.json` on Linux) and keeps its data beside it. See
+[configuration](docs/configuration.md) for every option, and
+[deployment](docs/deployment.md) for running Wish as a service and reaching it
+from other devices.
 
 ### From source
 

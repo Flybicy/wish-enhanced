@@ -22,7 +22,7 @@ pub struct SessionStatus {
   #[serde(skip_serializing_if = "Option::is_none")]
   state: Option<SessionState>,
   active_generation: Option<GenerationId>,
-  metadata: Value,
+  pub metadata: Value,
   pub config: SessionConfig,
   /// The live permission mode; it gates side-effect tools even mid-run.
   pub permission: PermissionMode,

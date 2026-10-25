@@ -124,7 +124,7 @@ pub async fn launch(
   let manager = app.subagents.clone();
   manager.update_status(&agent_id, "starting").await;
   let provider_id = {
-    let configuration = app.configuration.lock().await;
+    let configuration = app.config_file.lock().await;
     if configuration.config.defaults.provider.is_empty() {
       "openai".to_string()
     } else {
