@@ -17,6 +17,7 @@
 mod app;
 mod blobs;
 mod bridge;
+#[cfg(windows)]
 mod caption;
 mod codex_login;
 mod compaction_item;
