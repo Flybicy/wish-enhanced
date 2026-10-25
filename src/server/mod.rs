@@ -17,6 +17,7 @@
 mod app;
 mod blobs;
 mod caption;
+pub(crate) mod browser;
 mod bridge;
 mod codex_login;
 mod compaction_item;
@@ -47,7 +48,15 @@ mod user_dirs;
 mod web;
 
 pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
-  let mut args = std::env::args().skip(1);
+  let argv: Vec<String> = std::env::args().skip(1).collect();
+  // A start that should not reach for the browser: a shortcut, a service
+  // wrapper, a script that opens the interface itself.
+  let no_browser = argv.iter().any(|argument| argument == "--no-browser");
+  let argv: Vec<String> = argv
+    .into_iter()
+    .filter(|argument| argument != "--no-browser")
+    .collect();
+  let mut args = argv.into_iter();
   match std::env::args().nth(1).as_deref() {
     Some("mcp") => std::process::exit(mcp::cli::run(args.skip(1).collect()).await),
     Some("skill") => std::process::exit(skills::cli::run(args.skip(1).collect()).await),
@@ -66,8 +75,10 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
     (None, None, None) => user_dirs::ensure_config()?,
     (Some("--help"), None, None) => {
       println!(
-        "{name} [--config <config.json>]\nRuns Wish: its HTTP API and, when installed beside it, \
-         its web app.\nWithout --config it reads the user's configuration, written on first start."
+        "{name} [--config <config.json>] [--no-browser]\nRuns Wish: its HTTP API and, when \
+         installed beside it, its web app.\nWithout --config it reads the user's configuration, \
+         written on first start.\nWithout a console the web app is opened in a browser; \
+         --no-browser only prints the address."
       );
       return Ok(());
     }
@@ -75,7 +86,7 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
       println!("{name} {}", env!("CARGO_PKG_VERSION"));
       return Ok(());
     }
-    _ => return Err(format!("usage: {name} [--config <config.json>]").into()),
+    _ => return Err(format!("usage: {name} [--config <config.json>] [--no-browser]").into()),
   };
   crate::migration::run(&path)?;
   #[cfg(windows)]
@@ -83,9 +94,25 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
   let config: config::Config = serde_json::from_slice(&tokio::fs::read(&path).await?)?;
   let web_app = web::find_app_dir(config.web_dir.as_deref())?;
   let app = app::App::open(&config, path).await?;
-  let listener = tokio::net::TcpListener::bind(config.listen)
-    .await
-    .map_err(|error| format!("listen on {}: {error}", config.listen))?;
+  let listener = match tokio::net::TcpListener::bind(config.listen).await {
+    Ok(listener) => listener,
+    Err(error) => {
+      // A second start on an address that is already serving is the common
+      // double-click-twice case: show the running interface rather than fail.
+      if browser::already_serving(config.listen).await {
+        let browsable = if config.listen.ip().is_unspecified() {
+          std::net::SocketAddr::from(([127, 0, 0, 1], config.listen.port()))
+        } else {
+          config.listen
+        };
+        let url = format!("http://{browsable}");
+        eprintln!("{url} is already serving Wish; opening it");
+        let _ = browser::open(&url);
+        return Ok(());
+      }
+      return Err(format!("listen on {}: {error}", config.listen).into());
+    }
+  };
   let address = listener.local_addr()?;
   eprintln!("wish listening on {address}");
   app.bridge.set_address(address);
@@ -101,7 +128,16 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
     } else {
       address
     };
-    eprintln!("open http://{browsable} in a browser");
+    let url = format!("http://{browsable}");
+    eprintln!("open {url} in a browser");
+    // Double-clicked from Explorer there is no console to read that line, so
+    // the interface is opened instead of merely named. From a terminal the
+    // address is left alone: the person there is already looking at a shell.
+    if !no_browser && !browser::has_console() {
+      if let Err(error) = browser::open(&url) {
+        eprintln!("could not open {url}: {error}");
+      }
+    }
   }
   let shutdown = app.clone();
   let result = axum::serve(listener, http::build_router(app.clone(), front))

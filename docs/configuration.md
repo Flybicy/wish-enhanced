@@ -5,6 +5,7 @@ Wish reads one JSON file: the one `--config` names, or else its user's.
 ```sh
 wish                                # the user's configuration
 wish --config /path/to/config.json
+wish --no-browser                    # the same, but never opens the web app
 ```
 
 Packages install the program as `wish`; a build from source is
@@ -20,6 +21,12 @@ on Linux, `~/Library/Application Support/wish-agent/config.json` on macOS and
 `--help` prints usage and `--version` the version. Any startup
 problem (a missing file, invalid JSON, an unknown field, an unset environment
 variable, a port in use) prints an error and exits with status 1.
+
+A release build is a windowless program: started without a console (a
+double-click, a shortcut, the installer's launch step) it opens the web app in
+the default browser once it is listening, and reports a startup problem in a
+message box. `--no-browser` prints the address instead of opening it. A second
+start on an address that already serves Wish opens that interface and exits.
 
 The web app edits the same file through `PUT /api/config`, so it must stay
 writable by the Wish process, and so must its directory (saves are written to
