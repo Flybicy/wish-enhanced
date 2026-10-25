@@ -1,26 +1,45 @@
+//! Open sessions. A `SessionSlot` holds one while the server runs: the engine's session behind a
+//! lock, a sender and a reader beside it, and the descriptor - the application's own record of the session:
+//! its name, provider, working directory and tool switches. The descriptor and the session's
+//! status together are its index record, which the session list reads.
+//!
+//! - `run` starts, schedules and interrupts operations, and runs them;
+//! - `status` keeps the status the API reports, and turns engine events into web events;
+//! - `selection` changes provider and model, now or at an operation's next boundary;
+//! - `tools` holds the built-in tools and the switches that decide which a session has.
 mod live;
+mod run;
 pub mod selection;
+mod status;
 mod tools;
-use crate::server::{config::ShellSettings, error::ApiError, provider::Provider};
-use crate::{
-  executor::{self, ExecutionControl},
-  protocol::StreamEvent,
-  session::{
-    Entry, EntryId, EntryOrigin, Generation, HistoryReader, PermissionMode, RunOutcome, Session,
-    SessionConfig, SessionEvent, SessionHandle,
-    statistics::{ModelCallPurpose, ModelCallRecord, ModelCallStatus},
-  },
-  storage::ReadList,
-  tool::{
-    shell::{ShellCommand, ShellConfig, ShellTool},
-    view_image::ViewImageTool,
-  },
+
+pub use run::Operation;
+pub use status::web_event;
+pub use tools::{ToolChanges, ToolSwitches};
+
+use crate::server::{
+  app::App,
+  config::ShellSettings,
+  error::{ApiError, blocking},
+  management::ManagementStore,
 };
+use crate::{
+  executor::ExecutionControl,
+  protocol::Message,
+  session::{EntryId, PermissionMode, Session, SessionConfig, SessionReader, SessionSender},
+  tool::shell::{ShellCommand, ShellConfig},
+  utils::time::Timestamp,
+};
+use axum::http::HeaderValue;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use status::SessionStatus;
 use std::{
   path::PathBuf,
-  sync::{Arc, Mutex, RwLock},
+  sync::{
+    Arc, Mutex, RwLock, Weak,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+  },
 };
 use tokio::sync::{Mutex as AsyncMutex, broadcast};
 use tools::SessionTools;
@@ -34,78 +53,91 @@ fn has_goal(config: &SessionConfig) -> bool {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Descriptor {
+  /// A provider and config chosen while an operation ran, applied at its next boundary.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub pending_selection: Option<selection::PendingSelection>,
   pub name: String,
   pub updated_at: u64,
+  /// Advanced by every edit through `edit_descriptor`, which an `If-Match` header names.
   pub revision: u64,
   pub id: String,
   pub provider: String,
   pub cwd: PathBuf,
-  pub shell: bool,
+  /// Which optional built-in tools the session has.
+  pub tools: ToolSwitches,
   /// This session's own shell; absent while it follows the application's.
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub shell_command: Option<ShellSettings>,
+  #[serde(rename = "shell_command", default, skip_serializing_if = "Option::is_none")]
+  pub shell_override: Option<ShellSettings>,
   pub created_at: u64,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateSession {
   #[serde(default)]
-  pub initial_messages: Vec<crate::protocol::Message>,
+  pub initial_messages: Vec<Message>,
+  /// Where each initial message came from, when it came from another session (a fork); missing
+  /// origins are `Imported`.
+  #[serde(skip)]
+  pub initial_origins: Vec<crate::session::EntryOrigin>,
   #[serde(default)]
   pub name: String,
   pub provider: String,
   pub config: SessionConfig,
   pub cwd: PathBuf,
+  /// Optional tools to switch from the API defaults: no shell and no web search, `ask_user` and
+  /// MCP on.
   #[serde(default)]
-  pub shell: bool,
+  pub tools: ToolChanges,
   #[serde(default)]
   pub metadata: Value,
 }
 
 pub struct SessionSlot {
-  pub descriptor: RwLock<Descriptor>,
-  pub index: Arc<crate::server::management::ManagementStore>,
-  pub global_events: broadcast::Sender<Value>,
-  pub auto_run_generation: std::sync::atomic::AtomicU64,
-  pub deleted: std::sync::atomic::AtomicBool,
+  descriptor: RwLock<Descriptor>,
+  management: Arc<ManagementStore>,
+  /// The application's events, where the session list hears of changes.
+  global_events: broadcast::Sender<Value>,
+  /// Advanced by every interrupt: a run scheduled before one does not start after it.
+  schedule_epoch: AtomicU64,
+  deleted: AtomicBool,
   pub session: Arc<AsyncMutex<Session>>,
-  pub selection_edit: Arc<AsyncMutex<()>>,
-  pub handle: SessionHandle,
-  pub history: HistoryReader,
-  pub entries: ReadList<Entry>,
-  pub generations: ReadList<Generation>,
-  pub calls: ReadList<ModelCallRecord>,
-  /// Settled folds behind the snapshot stats block; see stats_value.
-  stats: Mutex<StatsMemo>,
-  pub queue: Mutex<ReadList<EntryId>>,
+  /// Serializes descriptor edits, which never wait for an operation.
+  pub update_lock: Arc<AsyncMutex<()>>,
+  /// Queues input while an operation holds the session.
+  pub sender: SessionSender,
+  /// Reads the session's history and lists while an operation holds it.
+  pub reader: SessionReader,
   pub tools: SessionTools,
-  /// The command this session's shell tool starts; None without a shell tool.
-  pub shell_command: Option<Arc<RwLock<ShellCommand>>>,
+  /// The command this session's shell tool starts, whether or not the tool is on.
+  effective_shell: Arc<RwLock<ShellCommand>>,
   /// The live permission mode; it gates side-effect tools even mid-run.
-  pub permission: Mutex<PermissionMode>,
+  permission: Mutex<PermissionMode>,
   /// A mode change requested while a run owned the session; persisted at run end.
   pending_permission: Mutex<Option<PermissionMode>>,
-  pub image_dir: PathBuf,
-  tasks: tokio_util::task::TaskTracker,
-  app: std::sync::Weak<crate::server::app::App>,
-  pub events: broadcast::Sender<Value>,
-  live: Mutex<live::LivePreview>,
-  pub status: Mutex<Value>,
-  pub control: Mutex<Option<ExecutionControl>>,
   /// Ask-mode approvals awaiting a user decision, with a redacted summary.
   /// Carried in the status snapshot so a UI refresh cannot lose a pending card.
   pending_approvals: Mutex<Vec<Value>>,
+  /// Settled folds behind the status stats block; see status::stats_value.
+  stats: Mutex<status::StatsMemo>,
+  /// The session's blobs, where its images are saved.
+  image_dir: PathBuf,
+  /// What this session's shell shows the MCP bridge; made anew each time the session opens, since
+  /// its shells do not outlive the process.
+  pub mcp_token: String,
+  tasks: tokio_util::task::TaskTracker,
+  app: Weak<App>,
+  /// This session's live events, for `GET /sessions/{id}/events`.
+  pub events: broadcast::Sender<Value>,
+  live: Mutex<live::LivePreview>,
+  status: Mutex<SessionStatus>,
+  /// The running operation's, while one runs.
+  control: Mutex<Option<ExecutionControl>>,
 }
 impl SessionSlot {
   pub async fn open(
+    app: &Arc<App>,
     descriptor: Descriptor,
     mut session: Session,
-    data_dir: PathBuf,
-    index: Arc<crate::server::management::ManagementStore>,
-    global_events: broadcast::Sender<Value>,
-    app: std::sync::Weak<crate::server::app::App>,
   ) -> Result<Arc<Self>, ApiError> {
     if !session.get_state().is_stable() {
       session.settle_interrupted().map_err(ApiError::internal)?;
@@ -126,244 +158,100 @@ impl SessionSlot {
     // A session's own shell wins; otherwise it starts from the application's and
     // follows later saves (see `follow_global_shell`). An override that no longer
     // resolves (the program was removed) falls back to the application's.
-    let shell_command = descriptor.shell.then(|| {
-      let global = app.upgrade().map_or_else(ShellCommand::platform_default, |app| {
-        app.shell.read().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
-      });
-      let own = descriptor.shell_command.as_ref().and_then(|settings| settings.resolve().ok());
-      Arc::new(RwLock::new(own.unwrap_or(global)))
-    });
-    let shell = if let Some(command) = &shell_command {
-      let mut config =
-        ShellConfig::new(&descriptor.cwd, data_dir.join("shell").join(&descriptor.id));
-      config.command = Arc::clone(command);
-      Some(ShellTool::new(config).await.map_err(ApiError::internal)?)
-    } else {
-      None
-    };
-    let image_dir = std::path::absolute(data_dir.join("blobs").join(&descriptor.id))
-      .map_err(ApiError::internal)?;
+    let own = descriptor.shell_override.as_ref().and_then(|settings| settings.resolve().ok());
+    let effective_shell =
+      Arc::new(RwLock::new(own.unwrap_or_else(|| app.shell.read().unwrap().clone())));
+    let mut shell_config = ShellConfig::new(&descriptor.cwd, app.data_dir.shell(&descriptor.id));
+    shell_config.command = Arc::clone(&effective_shell);
+    let mcp_token = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
+    // Set whether or not MCP is on: the bridge checks the switch, and the environment stays as it is.
+    shell_config.env.extend(app.mcp.bridge.shell_environment(&descriptor.id, &mcp_token));
+    let image_dir =
+      std::path::absolute(app.data_dir.blobs(&descriptor.id)).map_err(ApiError::internal)?;
+    let switches = descriptor.tools;
     // Workspace snapshots follow the application setting: true, false, or "auto".
     let snapshot_tool = {
-      let enabled = match app.upgrade() {
-        Some(app) => {
-          let configuration = app.configuration.lock().await;
-          configuration.config.workspace_history.enabled.clone()
-        }
-        None => "auto".into(),
-      };
+      let enabled = app.configuration.lock().await.config.workspace_history.enabled.clone();
       let want = match enabled.as_str() {
         "true" => true,
         "false" => false,
         _ => crate::tool::snapshot::looks_like_project(&descriptor.cwd),
       };
       if want {
-        let git_dir = data_dir.join("snapshots").join(&descriptor.id).join("repo.git");
+        let git_dir = app.data_dir.snapshots(&descriptor.id).join("repo.git");
         Some(crate::tool::snapshot::SnapshotTool::new(descriptor.cwd.clone(), git_dir))
       } else {
         None
       }
     };
-    let tasks = app.upgrade().expect("session application is alive").tasks.clone();
-    let skills = match app.upgrade() {
-      Some(app) => {
-        let (enabled, extra) = {
-          let configuration = app.configuration.lock().await;
-          (configuration.config.skills.enabled, configuration.config.skills.dirs.clone())
-        };
-        if enabled {
-          let mut dirs = vec![app.data_dir.join("skills")];
-          dirs.extend(extra);
-          Some(crate::server::skills::SkillSearchTool::new(dirs))
-        } else {
-          None
-        }
+    let skills = {
+      let (enabled, extra) = {
+        let configuration = app.configuration.lock().await;
+        (configuration.config.skills.enabled, configuration.config.skills.dirs.clone())
+      };
+      if enabled {
+        let mut dirs = vec![app.data_dir.skills()];
+        dirs.extend(extra);
+        Some(crate::server::skills::SkillSearchTool::new(dirs))
+      } else {
+        None
       }
-      _ => None,
     };
-    let memory = match app.upgrade() {
-      Some(app) => app.memory.clone().map(|store| crate::session::memory::MemoryRecallTool { store }),
-      None => None,
-    };
-    let tools =
-      SessionTools::new(shell, &session, app.clone(), descriptor.id.clone(), image_dir.clone(), snapshot_tool, skills, memory);
-    let entries = session.get_entries();
-    let calls = session.get_model_calls();
-    let mut stats_memo = StatsMemo::default();
+    let memory =
+      app.memory.clone().map(|store| crate::session::memory::MemoryRecallTool { store });
+    let status = Mutex::new(SessionStatus::read(&session));
     let permission = Mutex::new(session.get_config().permission);
-    let mut status_value =
-      snapshot(&session, session.get_config().permission, stats_value(&entries, &calls, &mut stats_memo));
-    // A reopen (service restart) never inherits pending approvals: their waiters
-    // died with the old process, so no card is actionable any more.
-    status_value["pending_approvals"] = json!(Vec::<Value>::new());
-    let status = Mutex::new(status_value);
+    let stats = Mutex::new(status::StatsMemo::default());
     let (events, _) = broadcast::channel(256);
-    Ok(Arc::new(Self {
+    let slot = Arc::new_cyclic(|slot| Self {
+      tools: SessionTools::new(
+        slot.clone(),
+        shell_config,
+        &session,
+        &descriptor.id,
+        snapshot_tool,
+        skills,
+        memory,
+      ),
       descriptor: RwLock::new(descriptor),
-      index,
-      global_events,
-      auto_run_generation: std::sync::atomic::AtomicU64::new(0),
-      deleted: std::sync::atomic::AtomicBool::new(false),
-      handle: session.create_handle(),
-      history: session.create_history_reader(),
-      entries,
-      generations: session.get_generations(),
-      calls,
-      stats: Mutex::new(stats_memo),
-      queue: Mutex::new(session.get_message_queue()),
+      management: app.management.clone(),
+      global_events: app.events.clone(),
+      schedule_epoch: AtomicU64::new(0),
+      deleted: AtomicBool::new(false),
+      sender: session.create_sender(),
+      reader: session.reader().clone(),
       session: Arc::new(AsyncMutex::new(session)),
-      selection_edit: Arc::new(AsyncMutex::new(())),
-      tools,
-      shell_command,
+      update_lock: Arc::new(AsyncMutex::new(())),
+      effective_shell,
       permission,
       pending_permission: Mutex::new(None),
+      pending_approvals: Mutex::new(Vec::new()),
+      stats,
       image_dir,
-      tasks,
-      app,
+      mcp_token,
+      tasks: app.lifecycle.tasks.clone(),
+      app: Arc::downgrade(app),
       events,
       live: Mutex::new(live::LivePreview::default()),
       status,
       control: Mutex::new(None),
-      pending_approvals: Mutex::new(Vec::new()),
-    }))
+    });
+    slot.tools.switch(switches).await?;
+    Ok(slot)
   }
-  pub fn configure_tools(&self, mut config: SessionConfig) -> Result<SessionConfig, ApiError> {
-    for tool in &config.tools {
-      let is_valid = match tool.name.as_str() {
-        "view_image" | "history_search" | "history_read" | "history_query" => true,
-        "shell_start" | "shell_edit" | "shell_poll" | "shell_write" | "shell_kill" => {
-          self.tools.shell.is_some()
-        }
-        "web_search" | "fetch_content" | "get_search_content" => {
-          self.tools.web_enabled()
-        }
-        "snapshot_checkpoint" | "snapshot_undo" | "snapshot_redo" => self.tools.snapshot.is_some(),
-        "skill_search" => self.tools.skills.is_some(),
-        "memory_recall" => self.tools.memory.is_some(),
-        "subagent" | "subagent_result" => self.tools.subagents_enabled(),
-        name if name.starts_with("mcp_") => {
-          let rest = &name["mcp_".len()..];
-          match rest.split_once('_') {
-            Some((server, _)) => self.tools.mcp_registered(server),
-            None => false,
-          }
-        }
-        _ => false,
-      };
-      if !is_valid {
-        return Err(ApiError::bad_request(format!("no executor for tool {}", tool.name)));
-      }
-    }
-    config.tools.clear();
-    config.tools.extend(self.tools.get_history_specifications());
-    config.tools.push(ViewImageTool.get_specification());
-    if let Some(shell) = &self.tools.shell {
-      config.tools.extend(shell.get_specifications());
-    }
-    if let Some(web) = self.tools.web_specifications() {
-      config.tools.extend(web);
-    }
-    if let Some(snapshot) = &self.tools.snapshot {
-      config.tools.extend(snapshot.get_specifications());
-    }
-    if let Some(skills) = &self.tools.skills {
-      config.tools.push(skills.get_specification());
-    }
-    if let Some(memory) = &self.tools.memory {
-      config.tools.push(memory.get_specification());
-    }
-    if self.tools.subagents_enabled() {
-      if let Some(app) = self.tools.app_handle() {
-        config.tools.extend(crate::server::subagents::get_specifications(&app.subagents));
-      }
-    }
-    config.tools.extend(self.tools.mcp_specifications());
-    Ok(config)
+  /// Refuses an edit made against a revision the descriptor has moved past.
+  pub fn check_revision(&self, if_match: Option<&HeaderValue>) -> Result<(), ApiError> {
+    expect_revision(if_match, self.descriptor.read().unwrap().revision)
   }
-  pub fn describe(&self) -> Value {
-    {
-      let mut status = self.status.lock().unwrap().clone();
-      status["queue_count"] = json!(
-        self
-          .queue
-          .lock()
-          .unwrap()
-          .len()
-          .unwrap_or(0)
-          .saturating_sub(status["queue_head"].as_u64().unwrap_or(0))
-      );
-      let mut descriptor = self.get_descriptor();
-      if let Some(pending) = &descriptor.pending_selection {
-        descriptor.provider = pending.provider.clone();
-        status["config"] = json!(pending.config);
-        status["selection_pending"] = json!(true);
-      }
-      json!({"session":descriptor,"status":status})
-    }
-  }
-  pub fn get_descriptor(&self) -> Descriptor {
-    self.descriptor.read().unwrap().clone()
-  }
-  /// Applies the application's new shell unless this session has its own.
-  pub fn follow_global_shell(&self, global: &ShellCommand) {
-    if self.descriptor.read().unwrap().shell_command.is_none()
-      && let Some(command) = &self.shell_command
-    {
-      *command.write().unwrap_or_else(|poisoned| poisoned.into_inner()) = global.clone();
-    }
-  }
-  /// Gives this session its own shell, or with None returns it to the application's.
-  pub fn set_shell(
-    &self,
-    settings: Option<ShellSettings>,
-    global: &ShellCommand,
-  ) -> Result<(), ApiError> {
-    let Some(command) = &self.shell_command else {
-      return Err(ApiError::bad_request("this session has no shell tool"));
-    };
-    let next = match &settings {
-      Some(settings) => settings.resolve()?,
-      None => global.clone(),
-    };
-    *command.write().unwrap_or_else(|poisoned| poisoned.into_inner()) = next;
-    self.descriptor.write().unwrap().shell_command = settings;
+  /// Marks the session as just used - a user message or answer arrived - and saves the index, so
+  /// the session list, ordered by `updated_at`, brings it to the top at once.
+  pub fn touch(&self) -> Result<(), ApiError> {
+    self.descriptor.write().unwrap().updated_at = Timestamp::now().0;
     self.persist_index()
-  }
-  pub fn require_live(&self) -> Result<(), ApiError> {
-    if self.deleted.load(std::sync::atomic::Ordering::Acquire) {
-      Err(ApiError::not_found())
-    } else {
-      Ok(())
-    }
-  }
-  pub fn persist_index(&self) -> Result<(), ApiError> {
-    self.require_live()?;
-    let mut record = self.describe();
-    // `describe` previews a pending provider to the UI. Persist the actual provider so a restart
-    // can still ask it to translate an encrypted compaction item before applying the selection.
-    record["session"] = json!(self.get_descriptor());
-    self.index.save(&record)?;
-    let _ =
-      self.global_events.send(json!({"type":"session_changed","id":self.get_descriptor().id}));
-    Ok(())
-  }
-  pub fn update_snapshot(&self, session: &Session) {
-    *self.queue.lock().unwrap() = session.get_message_queue();
-    // A full config write (PUT /config) may carry a different mode: stay aligned.
-    let next = session.get_config().permission;
-    if let Ok(mut current) = self.permission.try_lock() {
-      if *current != next && next != PermissionMode::Ask {
-        // Leaving ask voids whatever is pending: the waiting call is aborted,
-        // never silently executed without an explicit decision.
-        self.cancel_pending_approvals();
-      }
-      *current = next;
-    }
-    *self.status.lock().unwrap() = self.refresh_status(session);
   }
   /// Drops every pending approval of this session so the blocked executors
   /// observe a cancelled decision.
-  fn cancel_pending_approvals(&self) {
+  pub fn cancel_pending_approvals(&self) {
     if let Some(app) = self.app.upgrade() {
       app.cancel_approvals(&self.get_descriptor().id, None);
     }
@@ -378,30 +266,29 @@ impl SessionSlot {
     self.require_live()?;
     let previous = *self.permission.lock().unwrap();
     *self.permission.lock().unwrap() = mode;
+    if let Ok(mut status) = self.status.try_lock() {
+      status.permission = mode;
+    }
     if previous != mode && mode != PermissionMode::Ask {
+      // Leaving ask voids whatever is pending: the waiting call is aborted,
+      // never silently executed without an explicit decision.
       self.cancel_pending_approvals();
     }
     match self.session.clone().try_lock_owned() {
       Ok(mut session) => {
         session.set_permission(mode)?;
-        self.update_snapshot(&session);
+        self.refresh_status(&session);
         self.persist_index()?;
       }
       Err(_) => {
-        self.status.lock().unwrap()["permission"] = json!(mode);
         *self.pending_permission.lock().unwrap() = Some(mode);
       }
     }
     Ok(())
   }
-  /// Rebuilds the status with fresh stats folds; the memo keeps each read cheap.
-  fn refresh_status(&self, session: &Session) -> Value {
-    let mut memo = self.stats.lock().unwrap();
-    let mut status =
-      snapshot(session, self.permission(), stats_value(&self.entries, &self.calls, &mut memo));
-    // Survives the rebuild: a pending approval must stay visible across refreshes.
-    status["pending_approvals"] = json!(self.list_pending_approvals());
-    status
+  /// Takes a permission change a run could not apply yet, now that it ended.
+  pub(super) fn take_pending_permission(&self) -> Option<PermissionMode> {
+    self.pending_permission.lock().unwrap().take()
   }
   /// The ask-mode approvals currently waiting on a user decision.
   pub fn list_pending_approvals(&self) -> Vec<Value> {
@@ -421,16 +308,16 @@ impl SessionSlot {
       let mut live = self.live.lock().unwrap();
       live.note_approval(call_id, name, summary, generation);
     }
-    self.pending_approvals.lock().unwrap().retain(|entry| {
+    let mut pending = self.pending_approvals.lock().unwrap();
+    pending.retain(|entry| {
       entry["call_id"].as_str() != Some(call_id) || entry["generation"].as_u64() != Some(generation)
     });
-    self.pending_approvals.lock().unwrap().push(json!({
+    pending.push(json!({
       "call_id": call_id,
       "name": name,
       "generation": generation,
       "summary": summary,
     }));
-    self.publish_pending_approvals();
   }
   /// Removes it once answered, cancelled, timed out or superseded, and tells
   /// live clients so their card disappears without another poll.
@@ -447,289 +334,89 @@ impl SessionSlot {
       let mut live = self.live.lock().unwrap();
       live.retire_approval(call_id, generation);
     }
-    self.publish_pending_approvals();
     if removed {
       let _ = self.events.send(json!({"type":"approval_closed","call_id":call_id,"generation":generation}));
     }
   }
-  fn publish_pending_approvals(&self) {
-    let pending = self.list_pending_approvals();
-    // try_lock: never block on the status mutex just to keep a card visible.
-    if let Ok(mut status) = self.status.try_lock() {
-      status["pending_approvals"] = json!(pending);
-    }
+  pub fn get_descriptor(&self) -> Descriptor {
+    self.descriptor.read().unwrap().clone()
   }
-  pub fn interrupt(&self) -> bool {
-    self.auto_run_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let control = self.control.lock().unwrap().as_ref().cloned();
-    // The bumped generation voids every approval that asked under the old
-    // one: drop their senders so the blocked executors wake up cancelled
-    // instead of waiting for a decision that can no longer grant anything.
-    self.cancel_pending_approvals();
-    if let Some(control) = control {
-      control.cancel();
-      true
-    } else {
-      false
-    }
+  /// Edits the descriptor, checking the revision an `If-Match` header names. The edit works on a
+  /// copy, which the session takes - a revision on, stamped now - once the index holds it.
+  pub fn edit_descriptor(
+    &self,
+    if_match: Option<&HeaderValue>,
+    edit: impl FnOnce(&mut Descriptor) -> Result<(), ApiError>,
+  ) -> Result<(), ApiError> {
+    let mut descriptor = self.descriptor.write().unwrap();
+    expect_revision(if_match, descriptor.revision)?;
+    let mut next = descriptor.clone();
+    edit(&mut next)?;
+    next.revision += 1;
+    next.updated_at = Timestamp::now().0;
+    self.management.save(&self.index_record(&next))?;
+    *descriptor = next;
+    drop(descriptor);
+    self.announce_change();
+    Ok(())
   }
-  pub fn observe(&self, event: &SessionEvent) {
-    if let SessionEvent::InputsConsumed { queue_end, .. } = event {
-      self.status.lock().unwrap()["queue_head"] = json!(queue_end);
-    }
-    if let SessionEvent::StateChanged { to, .. } = event {
-      self.status.lock().unwrap()["phase"] = json!(to);
-      if let Err(error) = self.persist_index() {
-        eprintln!("session index: {error}");
-      }
-    }
-    if let SessionEvent::CompactionSummaryStarted { .. } = event {
-      self.status.lock().unwrap()["standby_preparing"] = json!(true);
-    }
-    if matches!(
-      event,
-      SessionEvent::CompactionSummary { .. } | SessionEvent::CompactionSummaryFailed { .. }
-    ) {
-      self.status.lock().unwrap()["standby_preparing"] = json!(false);
-    }
-    if let SessionEvent::ContextCompacted { .. } = event {
-      self.status.lock().unwrap()["standby_preparing"] = json!(false);
-    }
-    let mut live = self.live.lock().unwrap();
-    live.observe(event);
-    if let Some(event) = web_event(event) {
-      let _ = self.events.send(json!({"type":"session_event","event":event,"revision":live.revision}));
-    }
+  /// The session as the API shows it.
+  pub fn describe(&self) -> Value {
+    let mut record = self.index_record(&self.get_descriptor());
+    preview_pending_selection(&mut record);
+    record
   }
-  pub fn subscribe_live(&self) -> (broadcast::Receiver<Value>, Value) {
-    // Subscription and snapshot share the publication lock: no gap or duplicate deltas.
-    let live = self.live.lock().unwrap();
-    (self.events.subscribe(), live.snapshot(self.describe()))
+  /// The session as the index keeps it: the provider it actually uses, which a restart may still
+  /// need to translate an encrypted compaction item before a pending selection applies, and the
+  /// status as the API shows it.
+  fn index_record(&self, descriptor: &Descriptor) -> Value {
+    json!({"session":descriptor,"status":self.view_status(descriptor)})
   }
-  pub async fn execute(
-    self: Arc<Self>,
-    provider: Arc<Provider>,
-    provider_id: String,
-    mut session: tokio::sync::OwnedMutexGuard<Session>,
-    control: ExecutionControl,
-    compact: bool,
-  ) {
-    let model = selection::SwitchingModel::new(
-      self.make_model(provider, provider_id).with_goal_retry(has_goal(session.get_config())),
-    );
-    let result = if compact {
-      let prepared = match session.get_history().len() {
-        Ok(mut cursor) => self.apply_selection(
-          &mut session, &model, &control, &mut cursor, &mut |event| self.observe(event),
-        ).await,
-        Err(error) => Err(error.into()),
-      };
-      match prepared {
-        Ok(executor::BoundaryResult::Interrupted) => {
-          session.finish_run(RunOutcome::Interrupted).map(|_| RunOutcome::Interrupted)
-        }
-        Ok(_) => executor::compaction::compact(&model, &mut session, &control, |event| self.observe(event)).await,
-        Err(error) => Err(error),
-      }
-    } else {
-      executor::run_with_boundary(
-        &model,
-        &mut session,
-        &self.tools,
-        &control,
-        |event| self.observe(event),
-        selection::SelectionBoundary { slot: &self, model: &model },
-      )
-      .await
-    };
-    *self.control.lock().unwrap() = None;
-    // A permission switch requested mid-run persists now that the session is free.
-    if let Some(mode) = self.pending_permission.lock().unwrap().take() {
-      if let Err(error) = session.set_permission(mode) {
-        eprintln!("session permission: {error}");
-      }
-    }
-    // Observational memory: capture one bounded observation per finished run, when enabled.
-    if let Some(app) = self.tools.app_handle() {
-      if let Some(memory) = &app.memory {
-        let priority = match &result {
-          Ok(outcome) => if matches!(outcome, RunOutcome::Completed | RunOutcome::Interrupted) { "normal" } else { "warn" },
-          Err(_) => "warn",
-        };
-        let name = self.descriptor.read().unwrap().name.clone();
-        let detail = match &result {
-          Ok(outcome) => format!("run finished: {outcome:?}"),
-          Err(error) => format!("run failed: {error}"),
-        };
-        let _ = memory.observe(&self.get_descriptor().id, priority, &format!("{name} — {detail}"));
-      }
-    }
-    if result.is_err() && !session.get_state().is_stable() {
-      let _ = session.settle_interrupted();
-    }
-    let event = match result {
-      Ok(outcome) => json!({"type":"operation_finished","outcome":web_outcome(&outcome)}),
-      Err(error) => json!({"type":"operation_failed","error":error.to_string()}),
-    };
-    {
-      let mut status = self.status.lock().unwrap();
-      *status = self.refresh_status(&session);
-      status["last_operation"] = event.clone();
-    }
-    {
-      self.descriptor.write().unwrap().updated_at = crate::session::statistics::Timestamp::now().0;
-    }
-    if let Err(error) = self.index.save_calls(&self.get_descriptor(), &self.calls) {
-      eprintln!("call index: {error}");
-    }
-    if let Err(error) = self.persist_index() {
-      eprintln!("session index: {error}");
-    }
-    let _ = self.events.send(event);
+  /// Saves the index record, and tells the session list.
+  pub fn persist_index(&self) -> Result<(), ApiError> {
+    self.require_live()?;
+    self.management.save(&self.index_record(&self.get_descriptor()))?;
+    self.announce_change();
+    Ok(())
+  }
+  fn announce_change(&self) {
+    let _ =
+      self.global_events.send(json!({"type":"session_changed","id":self.get_descriptor().id}));
+  }
+  /// Takes a change made to the session: refreshes its status and index record, and returns the
+  /// session as the API shows it.
+  pub fn publish(&self, session: &Session) -> Result<Value, ApiError> {
+    self.refresh_status(session);
+    self.persist_index()?;
+    Ok(self.describe())
+  }
+  /// Queues a message for the session's next run.
+  pub async fn enqueue(&self, message: Message) -> Result<EntryId, ApiError> {
+    let sender = self.sender.clone();
+    blocking(move || Ok(sender.enqueue_message(message)?)).await
+  }
+  pub fn require_live(&self) -> Result<(), ApiError> {
+    if self.deleted.load(Ordering::Acquire) { Err(ApiError::not_found()) } else { Ok(()) }
+  }
+  /// Marks the session deleted: from now on it is not found.
+  pub fn mark_deleted(&self) {
+    self.deleted.store(true, Ordering::Release);
   }
 }
-/// The web only needs display deltas and a concise outcome. Opaque replay data stays
-/// in session storage, where it can be inspected without flooding every live client.
-pub(crate) fn web_event(event: &SessionEvent) -> Option<Value> {
-  match event {
-    SessionEvent::ModelStream(
-      StreamEvent::ReasoningCiphertextDelta { .. }
-      | StreamEvent::ReasoningSignatureDelta { .. }
-      | StreamEvent::ReasoningReplayItem { .. }
-      | StreamEvent::UpstreamCompaction { .. },
-    ) => None,
-    SessionEvent::Finished(outcome) => Some(json!({"Finished":web_outcome(outcome)})),
-    SessionEvent::ResponseInterrupted(_) => Some(json!({"ResponseInterrupted":{}})),
-    SessionEvent::ResponseRejected(_) => Some(json!({"ResponseRejected":{}})),
-    SessionEvent::UpstreamCompactionCompleted(_) => Some(json!({"UpstreamCompactionCompleted":{}})),
-    SessionEvent::CompactionSummary { source_start, source_end, .. } =>
-      Some(json!({"CompactionSummary":{"source_start":source_start,"source_end":source_end}})),
-    SessionEvent::CompactionSummaryFailed { outcome } =>
-      Some(json!({"CompactionSummaryFailed":{"outcome":web_outcome(outcome)}})),
-    SessionEvent::CompactionTranslationFailed { .. } =>
-      Some(json!({"CompactionTranslationFailed":{}})),
-    SessionEvent::ToolStarted(call) => Some(json!({"ToolStarted":{"name":call.name}})),
-    SessionEvent::ToolFinished { .. } => Some(json!({"ToolFinished":{}})),
-    SessionEvent::MetadataUpdated(_) => Some(json!({"MetadataUpdated":{}})),
-    _ => Some(json!(event)),
+
+/// Shows a pending model selection in an index record as made: its provider in place of the
+/// session's. The status shows its config already.
+pub fn preview_pending_selection(record: &mut Value) {
+  if let Some(provider) = record.pointer("/session/pending_selection/provider").cloned() {
+    record["session"]["provider"] = provider;
   }
 }
-fn web_outcome(outcome: &RunOutcome) -> Value {
-  match outcome {
-    RunOutcome::StreamFailed(partial) => json!({"StreamFailed":{"reason":partial.reason}}),
-    RunOutcome::ModelStopped(response) =>
-      json!({"ModelStopped":{"stop_reason":response.stop_reason}}),
-    _ => json!(outcome),
-  }
-}
-fn snapshot(session: &Session, permission: PermissionMode, stats: Value) -> Value {
-  json!({"phase":session.get_state().get_phase(),"state":session.get_state(),
-    "active_generation":session.get_active_generation().ok().map(|g|g.id),"metadata":session.get_metadata(),"config":session.get_config(),"permission":permission,"queue_head":session.get_queue_head(),"running":false,"standby_preparing":false,
-    "context_tokens":context_tokens(session),"stats":stats})
-}
-/// Running totals behind the stats line under the composer. Settled entries
-/// and model calls fold into the memo once; the unsettled tail is summed per
-/// read because live records are updated in place.
-#[derive(Default)]
-struct StatsMemo {
-  entries: u64,
-  turns: u64,
-  calls: u64,
-  steps: u64,
-  input_tokens: u64,
-  output_tokens: u64,
-  cached_tokens: u64,
-}
-impl StatsMemo {
-  fn fold(&mut self, call: &ModelCallRecord) {
-    if call.purpose == ModelCallPurpose::Conversation {
-      self.steps += 1;
+
+fn expect_revision(if_match: Option<&HeaderValue>, revision: u64) -> Result<(), ApiError> {
+  match if_match {
+    Some(value) if value.to_str().ok() != Some(revision.to_string().as_str()) => {
+      Err(ApiError::conflict("session changed; reload before saving"))
     }
-    self.input_tokens += call.usage.input_tokens.unwrap_or(0);
-    self.output_tokens += call.usage.output_tokens.unwrap_or(0);
-    self.cached_tokens += call.usage.cached_input_tokens.unwrap_or(0);
+    _ => Ok(()),
   }
-}
-/// Folds new settled records into memo, then builds the snapshot stats block
-/// from the memo plus the live tail. A shrinking store means it was replaced;
-/// everything restarts from scratch.
-fn stats_value(
-  entries: &ReadList<Entry>,
-  calls: &ReadList<ModelCallRecord>,
-  memo: &mut StatsMemo,
-) -> Value {
-  let entry_len = entries.len().unwrap_or(0);
-  let call_len = calls.len().unwrap_or(0);
-  if entry_len < memo.entries || call_len < memo.calls {
-    *memo = StatsMemo::default();
-  }
-  while memo.entries < entry_len {
-    let Ok(Some(entry)) = entries.get(memo.entries) else { break };
-    if entry.origin == EntryOrigin::Input {
-      memo.turns += 1;
-    }
-    memo.entries += 1;
-  }
-  while memo.calls < call_len {
-    let Ok(Some(call)) = calls.get(memo.calls) else { break };
-    if call.status == ModelCallStatus::Running {
-      break;
-    }
-    memo.fold(&call);
-    memo.calls += 1;
-  }
-  let mut live = StatsMemo::default();
-  for position in memo.calls..call_len {
-    if let Ok(Some(call)) = calls.get(position) {
-      live.fold(&call);
-    }
-  }
-  // The speed of the most recent finished conversation call, in tokens/second.
-  let mut rate = None;
-  for position in (0..call_len).rev() {
-    let Ok(Some(call)) = calls.get(position) else { continue };
-    if call.purpose != ModelCallPurpose::Conversation
-      || call.status != ModelCallStatus::Completed
-    {
-      continue;
-    }
-    let output = call.usage.output_tokens.unwrap_or(0);
-    let seconds = match (call.first_event_at, call.finished_at) {
-      (Some(first), Some(last)) if last.0 > first.0 => Some((last.0 - first.0) as f64 / 1000.0),
-      _ => call.elapsed_ms.map(|ms| ms as f64 / 1000.0),
-    };
-    if let Some(seconds) = seconds
-      && seconds > 0.0
-    {
-      rate = Some(output as f64 / seconds);
-    }
-    break;
-  }
-  let input_tokens = memo.input_tokens + live.input_tokens;
-  let cached_tokens = memo.cached_tokens + live.cached_tokens;
-  json!({"turns":memo.turns,"steps":memo.steps + live.steps,
-    "input_tokens":input_tokens,"output_tokens":memo.output_tokens + live.output_tokens,
-    "cached_tokens":cached_tokens,
-    "cache_hit":(input_tokens > 0).then(|| cached_tokens as f64 / input_tokens as f64),
-    "rate":rate})
-}
-/// The input size compaction compares with its trigger: the last completed
-/// conversation call of the active generation made with the configured model.
-fn context_tokens(session: &Session) -> Option<u64> {
-  let active = session.get_active_generation().ok()?.id;
-  let model = &session.get_config().model;
-  let calls = session.get_model_calls();
-  for position in (0..calls.len().ok()?).rev() {
-    let Some(call) = calls.get(position).ok()? else { continue };
-    if call.generation != active {
-      break;
-    }
-    if &call.model == model
-      && call.purpose == ModelCallPurpose::Conversation
-      && matches!(call.status, ModelCallStatus::Completed)
-    {
-      return call.last_request_input_tokens;
-    }
-  }
-  None
 }

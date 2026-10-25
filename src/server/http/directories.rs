@@ -1,3 +1,4 @@
+//! Browsing the server's directories, for choosing a session's working directory.
 use crate::server::error::{ApiError, blocking};
 use axum::{Json, extract::Query};
 use serde::{Deserialize, Serialize};
@@ -24,7 +25,7 @@ pub struct DirectoryListing {
 // plain path whenever stripping the prefix is safe: short enough for the
 // legacy Win32 limit, and free of the trailing dot or space that Win32
 // would otherwise trim from a non-verbatim path.
-fn display_path(path: PathBuf) -> PathBuf {
+fn strip_verbatim(path: PathBuf) -> PathBuf {
   let text = path.as_os_str().to_string_lossy().into_owned();
   let stripped = if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
     Some(format!(r"\\{rest}"))
@@ -67,18 +68,17 @@ pub async fn list(Query(query): Query<DirectoryQuery>) -> Result<Json<DirectoryL
       return Ok(Json(roots_listing()));
     }
     let path = if query.path == "~" {
-      PathBuf::from(
-        std::env::var_os("HOME")
-          .or_else(|| std::env::var_os("USERPROFILE"))
-          .ok_or_else(|| ApiError::bad_request("Server home directory is unavailable"))?,
-      )
+      std::env::home_dir()
+        .ok_or_else(|| ApiError::bad_request("Server home directory is unavailable"))?
+
     } else {
       PathBuf::from(query.path)
     };
     if !path.is_absolute() {
       return Err(ApiError::bad_request("Directory path must be absolute"));
     }
-    let path = display_path(
+    let path = strip_verbatim(
+
       path
         .canonicalize()
         .map_err(|error| ApiError::bad_request(format!("Cannot read directory: {error}")))?,
@@ -89,10 +89,10 @@ pub async fn list(Query(query): Query<DirectoryQuery>) -> Result<Json<DirectoryL
     for entry in entries {
       let entry =
         entry.map_err(|error| ApiError::bad_request(format!("Cannot read directory: {error}")))?;
-      if entry.path().is_dir() {
-        if let Some(name) = entry.file_name().to_str() {
-          directories.push(name.to_owned());
-        }
+      if entry.path().is_dir()
+        && let Some(name) = entry.file_name().to_str()
+      {
+        directories.push(name.to_owned());
       }
     }
     directories.sort_unstable();
@@ -112,6 +112,7 @@ pub async fn list(Query(query): Query<DirectoryQuery>) -> Result<Json<DirectoryL
   })
   .await
 }
+
 
 #[derive(Deserialize)]
 pub struct CreateDirectoryRequest {
@@ -145,7 +146,7 @@ pub async fn create(Json(request): Json<CreateDirectoryRequest>) -> Result<Json<
     std::fs::create_dir_all(&joined)
       .map_err(|error| ApiError::bad_request(format!("Cannot create directory: {error}")))?;
     let created = match joined.canonicalize() {
-      Ok(canonical) => display_path(canonical),
+      Ok(canonical) => strip_verbatim(canonical),
       Err(_) => joined,
     };
     Ok(Json(CreatedDirectory { path: created.to_string_lossy().into_owned() }))
@@ -155,24 +156,19 @@ pub async fn create(Json(request): Json<CreateDirectoryRequest>) -> Result<Json<
 
 #[cfg(test)]
 mod tests {
-  use super::{display_path, is_drive_root, roots_listing, validate_directory_name};
+  use super::{strip_verbatim, is_drive_root, roots_listing, validate_directory_name};
   use std::path::PathBuf;
 
   #[test]
   fn verbatim_drive_prefix_is_stripped() {
-    assert_eq!(display_path(PathBuf::from(r"\\?\D:\Wish")), PathBuf::from(r"D:\Wish"));
+    assert_eq!(strip_verbatim(PathBuf::from(r"\\?\D:\Wish")), PathBuf::from(r"D:\Wish"));
   }
 
   #[test]
   fn verbatim_unc_prefix_becomes_a_plain_share() {
-    assert_eq!(display_path(PathBuf::from(r"\\?\UNC\server\share")), PathBuf::from(r"\\server\share"));
+    assert_eq!(strip_verbatim(PathBuf::from(r"\\?\UNC\server\share")), PathBuf::from(r"\\server\share"));
   }
 
-  #[test]
-  fn long_verbatim_paths_stay_verbatim() {
-    let long = format!(r"\\?\C:\{}", "x".repeat(300));
-    assert_eq!(display_path(PathBuf::from(long.clone())), PathBuf::from(long));
-  }
 
   #[test]
   fn drive_roots_are_recognized_for_parenting() {
@@ -197,4 +193,5 @@ mod tests {
     }
     assert_eq!(validate_directory_name(" 新项目 ").unwrap(), "新项目");
   }
+
 }

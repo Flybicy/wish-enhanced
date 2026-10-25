@@ -1,13 +1,28 @@
+//! The HTTP API: the routes, and the layers every request passes - the checks a server without a
+//! token makes (see [`web`]), cross-origin rules and the bearer token. Everything lives under
+//! `/api` except the unauthenticated `/health` and `/version`; other paths are the web app's.
 mod ask;
-pub(crate) mod content;
+mod config;
+mod content;
 mod directories;
+mod history;
 mod manage;
+mod mcp;
 mod providers;
+mod search;
 mod sessions;
-mod statistics;
+mod sse;
+mod status;
+mod storage;
+mod usage;
+use crate::server::{
+  app::App,
+  codex_login, presets,
+  web::{self, WebFront},
+};
 mod skills;
 mod workspace;
-use crate::server::{app::App, error::ApiError};
+
 use axum::{
   Json, Router,
   body::Body,
@@ -15,70 +30,43 @@ use axum::{
   http::{HeaderValue, Method, StatusCode, header},
   middleware::{self, Next},
   response::{IntoResponse, Response},
-  routing::{get, post, put},
+  routing::{delete, get, post, put},
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use std::sync::Arc;
 
-pub fn build_router(app: Arc<App>) -> Router {
-  // The bundled web interface talks to /api from this server's own origin; with
-  // no token configured its write calls are rejected, so say so once at startup
-  // instead of letting the page surface it as an unexplained 401.
-  if app.token.is_none() {
-    eprintln!(
-      "wish: no bearer token configured (bearer_token_env is unset): /api reads work, write calls are rejected until a token is set and the server restarts"
-    );
-  }
+pub fn build_router(app: Arc<App>, front: Arc<WebFront>) -> Router {
   let api = Router::new()
-    .route("/status", get(statistics::status))
-    .route("/storage", get(statistics::storage))
-    .route("/usage", get(statistics::global_usage))
-    .route("/usage/series", get(statistics::global_series))
-    .route("/usage/daily", get(statistics::global_daily))
-    .route("/sessions/{id}/usage", get(statistics::session_usage))
-    .route("/sessions/{id}/usage/series", get(statistics::session_series))
-    .route("/sessions/{id}/usage/daily", get(statistics::session_daily))
-    .route("/sessions/{id}/ask", post(ask::ask))
-    .route("/sessions/{id}/input", post(content::input))
-    .route("/sessions/{id}/blobs", post(content::upload))
-    .route("/sessions/{id}/blobs/{blob}", get(content::download))
-    .route("/sessions/{id}/blobs/{blob}/meta", get(content::metadata))
-    .route("/sessions/{id}/history", get(content::timeline))
-    .route("/sessions/{id}/workspace", get(workspace::list))
-    .route("/config", get(manage::configuration).put(manage::save_configuration))
-    .route("/proxy-environment", get(|| async { Json(crate::server::config::proxy_environment()) }))
-    .route("/shells", get(|| async { Json(crate::server::config::shell_catalog()) }))
-    .route("/defaults", get(manage::defaults))
+    .route("/status", get(status::status))
+    .route("/events", get(status::events))
+    .route("/version", get(version))
+    .route("/storage", get(storage::storage))
+    .route("/storage/sessions", get(storage::session_storage))
+    .route("/storage/prune", post(storage::prune))
+    .route("/usage", get(usage::global_usage))
+    .route("/usage/series", get(usage::global_series))
+    .route("/usage/daily", get(usage::global_daily))
+    .route("/sessions/{id}/usage", get(usage::session_usage))
+    .route("/sessions/{id}/usage/series", get(usage::session_series))
+    .route("/sessions/{id}/usage/daily", get(usage::session_daily))
+    .route("/config", get(config::get).put(config::save))
+    .route("/proxy-environment", get(config::proxy_environment))
+    .route("/shells", get(config::shells))
+    .route("/defaults", get(config::defaults))
     .route("/directories", get(directories::list))
-    .route("/directories/create", post(directories::create))
-    .route("/skills", get(skills::catalog))
-    .route("/skills/install", post(skills::install))
-    .route("/events", get(manage::events))
-    .route(
-      "/version",
-      get(|| async { Json(json!({"name":"wish","version":env!("CARGO_PKG_VERSION")})) }),
-    )
-    .route("/sessions/{id}/context/clear", post(manage::clear_context))
-    .route("/sessions/{id}/rewind", post(manage::rewind))
-    .route("/sessions/{id}/fork", post(manage::fork))
-    .route(
-      "/sessions/{id}/queue/{entry}",
-      axum::routing::delete(manage::cancel_input).patch(manage::move_input),
-    )
-    .route("/provider-presets", get(|| async { Json(crate::server::presets::catalog()) }))
+    .route("/provider-presets", get(|| async { Json(presets::provider_presets()) }))
+    .route("/search-presets", get(|| async { Json(presets::search_presets()) }))
+    .route("/search/providers", get(search::list))
+    .route("/search/providers/{id}/check", post(search::check))
+
     .route("/providers", get(providers::list))
+    .route("/provider-draft/models", post(providers::draft_models))
     .route("/providers/{id}", get(providers::get))
     .route("/providers/{id}/models", get(providers::models))
     .route("/providers/models/probe", post(providers::probe_models))
     .route("/providers/{id}/account", get(providers::account))
-    .route(
-      "/providers/{id}/chatgpt-login",
-      post(crate::server::codex_login::start).get(crate::server::codex_login::status),
-    )
-    .route(
-      "/providers/{id}/chatgpt-login/complete",
-      post(crate::server::codex_login::complete),
-    )
+    .route("/providers/{id}/chatgpt-login", post(codex_login::start).get(codex_login::status))
+    .route("/providers/{id}/chatgpt-login/complete", post(codex_login::complete))
     .route("/providers/{id}/call", post(providers::call))
     .route("/providers/{id}/count-tokens", post(providers::count))
     .route("/providers/{id}/compact", post(providers::compact))
@@ -87,13 +75,24 @@ pub fn build_router(app: Arc<App>) -> Router {
       "/sessions/{id}",
       get(sessions::get).patch(manage::update_session).delete(manage::delete_session),
     )
+    .route("/sessions/{id}/fork", post(manage::fork))
+    .route("/sessions/{id}/rewind", post(manage::rewind))
+    .route("/sessions/{id}/context/clear", post(manage::clear_context))
     .route("/sessions/{id}/messages", post(sessions::enqueue))
+    .route("/sessions/{id}/input", post(content::input))
+    .route("/sessions/{id}/queue/{entry}", delete(manage::cancel_input).patch(manage::move_input))
+    .route("/sessions/{id}/blobs", post(content::upload))
+    .route("/sessions/{id}/blobs/{blob}", get(content::download))
+    .route("/sessions/{id}/blobs/{blob}/meta", get(content::metadata))
     .route("/sessions/{id}/config", put(sessions::set_config))
     .route("/sessions/{id}/permission", post(sessions::set_permission))
     .route("/sessions/{id}/approvals/{call_id}", post(sessions::resolve_approval))
     .route("/sessions/{id}/goal", post(sessions::set_goal))
     .route("/sessions/{id}/metadata", put(sessions::set_metadata))
     .route("/sessions/{id}/shell", put(sessions::set_shell))
+    .route("/sessions/{id}/tools", put(sessions::set_tools))
+    .route("/sessions/{id}/answer", post(sessions::answer))
+    .route("/sessions/{id}/ask", post(ask::ask))
     .route("/sessions/{id}/run", post(sessions::run))
     .route("/sessions/{id}/interrupt", post(sessions::interrupt))
     .route("/sessions/{id}/compact", post(sessions::compact))
@@ -103,132 +102,45 @@ pub fn build_router(app: Arc<App>) -> Router {
     .route("/sessions/{id}/generations", get(sessions::generations))
     .route("/sessions/{id}/generations/{generation}/entries", get(sessions::generation_entries))
     .route("/sessions/{id}/calls", get(sessions::calls))
-    .route("/sessions/{id}/history/query", post(sessions::query_history))
-    .route("/sessions/{id}/history/search", post(sessions::search_history))
-    .route("/sessions/{id}/history/{sequence}", get(sessions::read_history))
+    .route("/sessions/{id}/history", get(history::timeline))
+    .route("/sessions/{id}/history/query", post(history::query))
+    .route("/sessions/{id}/history/search", post(history::search))
+    .route("/sessions/{id}/history/{sequence}", get(history::read))
+    .route("/mcp/servers", get(mcp::list))
+    .route("/mcp/servers/{id}/check", post(mcp::check))
     .layer(axum::extract::DefaultBodyLimit::max(32 * 1024 * 1024))
-    .route_layer(middleware::from_fn_with_state(app.clone(), authorize));
+    .route_layer(middleware::from_fn_with_state(app.clone(), authorize))
+    // The bridge a session's shell reaches its MCP servers through checks that session's own token
+    // instead of the application's.
+    .route("/sessions/{id}/mcp/servers", get(mcp::servers))
+    .route("/sessions/{id}/mcp/tool", get(mcp::tool))
+    .route("/sessions/{id}/mcp/call", post(mcp::call));
   Router::new()
     .nest("/api", api)
     .route("/health", get(|| async { Json(json!({"status":"ok"})) }))
-    .route(
-      "/version",
-      get(|| async { Json(json!({"name":"wish","version":env!("CARGO_PKG_VERSION")})) }),
-    )
-    .fallback(static_or_spa)
+    .route("/version", get(version))
+    .fallback({
+      let front = front.clone();
+      move |request: Request| async move { web::serve(&front, request).await }
+    })
+
     .layer(middleware::from_fn_with_state(app.clone(), cross_origin))
+    .layer(middleware::from_fn_with_state(front, web::guard))
     .with_state(app)
 }
-/// Serve the bundled web interface: real files from the directory beside the
-/// executable, with index.html answering client-side routes, while /api keeps
-/// its JSON 404.
-async fn static_or_spa(State(app): State<Arc<App>>, request: Request) -> Response {
-  let Some(dir) = app.web_dir.clone() else {
-    return ApiError::not_found().into_response();
-  };
-  let method = request.method();
-  if method != Method::GET && method != Method::HEAD {
-    return ApiError::not_found().into_response();
-  }
-  let path = request.uri().path().to_owned();
-  if path == "/api" || path.starts_with("/api/") {
-    return ApiError::not_found().into_response();
-  }
-  let rel = percent_decode(&path).trim_start_matches('/').to_owned();
-  // Anything that could escape the web directory: dotdot climbs, drive letters
-  // and leading separators make PathBuf::join replace its base, NUL confuses the
-  // filesystem. Absolute paths never reach a real file this way.
-  let escapes = rel.starts_with('\\')
-    || rel.split(['/', '\\']).any(|part| part == ".." || part.contains(':') || part.contains('\0'));
-  let (file, index) = if rel.is_empty() || escapes {
-    (dir.join("index.html"), true)
-  } else {
-    let candidate = dir.join(&rel);
-    match tokio::fs::metadata(&candidate).await {
-      Ok(meta) if meta.is_file() => (candidate, false),
-      _ => (dir.join("index.html"), true),
-    }
-  };
-  let bytes = match tokio::fs::read(&file).await {
-    Ok(bytes) => bytes,
-    Err(_) => return ApiError::not_found().into_response(),
-  };
-  let mut response = Response::new(Body::from(bytes));
-  let headers = response.headers_mut();
-  headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type(&file, index)));
-  let cache = if index || !rel.starts_with("assets/") {
-    "no-cache"
-  } else {
-    "public, max-age=31536000, immutable"
-  };
-  headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
-  response
+/// The server's identity, for a client checking what it talks to.
+async fn version() -> Json<Value> {
+  Json(json!({"name":"wish","version":env!("CARGO_PKG_VERSION")}))
 }
 
-fn content_type(file: &std::path::Path, index: bool) -> &'static str {
-  if index {
-    return "text/html; charset=utf-8";
-  }
-  match file
-    .extension()
-    .and_then(|extension| extension.to_str())
-    .map(str::to_ascii_lowercase)
-    .as_deref()
-  {
-    Some("html" | "htm") => "text/html; charset=utf-8",
-    Some("js" | "mjs") => "text/javascript; charset=utf-8",
-    Some("css") => "text/css; charset=utf-8",
-    Some("json" | "map") => "application/json; charset=utf-8",
-    Some("webmanifest") => "application/manifest+json; charset=utf-8",
-    Some("svg") => "image/svg+xml",
-    Some("png") => "image/png",
-    Some("jpg" | "jpeg") => "image/jpeg",
-    Some("gif") => "image/gif",
-    Some("webp") => "image/webp",
-    Some("avif") => "image/avif",
-    Some("ico") => "image/x-icon",
-    Some("woff") => "font/woff",
-    Some("woff2") => "font/woff2",
-    Some("ttf") => "font/ttf",
-    Some("otf") => "font/otf",
-    Some("txt" | "md") => "text/plain; charset=utf-8",
-    Some("wasm") => "application/wasm",
-    _ => "application/octet-stream",
-  }
-}
-
-/// Decode percent escapes in a URL path, byte by byte.
-fn percent_decode(input: &str) -> String {
-  let bytes = input.as_bytes();
-  let mut out = Vec::with_capacity(bytes.len());
-  let hex = |byte: u8| match byte {
-    b'0'..=b'9' => byte - b'0',
-    b'a'..=b'f' => byte - b'a' + 10,
-    b'A'..=b'F' => byte - b'A' + 10,
-    _ => 0xff,
-  };
-  let mut i = 0;
-  while i < bytes.len() {
-    if bytes[i] == b'%' && i + 2 < bytes.len() {
-      let (high, low) = (hex(bytes[i + 1]), hex(bytes[i + 2]));
-      if high != 0xff && low != 0xff {
-        out.push(high << 4 | low);
-        i += 3;
-        continue;
-      }
-    }
-    out.push(bytes[i]);
-    i += 1;
-  }
-  String::from_utf8_lossy(&out).into_owned()
-}
 /// CORS for a token-bearing server: a page on another origin keeps read-only
 /// access (`Access-Control-Allow-Origin: *` never authorizes credentials), while
 /// every write it attempts is rejected in `authorize` before it reaches a
 /// handler. A server without a token answers its own origin only, so an
 /// arbitrary web page cannot drive a local agent through the visitor's browser.
+
 async fn cross_origin(State(app): State<Arc<App>>, request: Request, next: Next) -> Response {
-  if app.token.is_none() || !request.headers().contains_key(header::ORIGIN) {
+  if app.bearer_token.is_none() || !request.headers().contains_key(header::ORIGIN) {
     return next.run(request).await;
   }
   let preflight = request.method() == Method::OPTIONS
@@ -275,7 +187,7 @@ async fn authorize(State(app): State<Arc<App>>, request: Request, next: Next) ->
       headers.get("sec-fetch-site").and_then(|value| value.to_str().ok()),
     )
   };
-  match admission(app.token.as_deref(), &method, supplied, origin, host, fetch_site) {
+  match admission(app.bearer_token.as_deref(), &method, supplied, origin, host, fetch_site) {
     Admission::Allow => next.run(request).await,
     Admission::Unauthorized => rejection(
       StatusCode::UNAUTHORIZED,
@@ -358,6 +270,15 @@ fn admission(
       } else {
         Admission::Allow
       }
+  if let Some(token) = &app.bearer_token {
+    let supplied = request
+      .headers()
+      .get("authorization")
+      .and_then(|h| h.to_str().ok())
+      .and_then(|h| h.strip_prefix("Bearer "));
+    if supplied != Some(token.as_str()) {
+      return (StatusCode::UNAUTHORIZED, Json(json!({"error":{"message":"unauthorized"}})))
+        .into_response();
     }
   }
 }

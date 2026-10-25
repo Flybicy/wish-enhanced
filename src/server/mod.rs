@@ -1,23 +1,43 @@
-//! HTTP application, provider configuration and operational session management.
+//! The Wish server: one process serving the HTTP API and the web app, driving sessions on the
+//! engine and calling providers.
+//!
+//! - `app` holds everything a request reaches, and the lifecycle from startup to shutdown;
+//! - `http` is the API; its handlers parse, check and answer, and leave the work to the rest;
+//! - `session` holds open sessions and runs them; `session_model` is the model a session calls;
+//! - `config` is the configuration file's schema, `config_file` the file as the server holds it;
+//! - `provider`, `search` and `mcp` are what a configuration builds: model providers, search
+//!   providers and MCP servers;
+//! - `management` is the index of sessions, model calls and stream samples (`sampling`), and
+//!   `data_dir` and `blobs` are the files beside it;
+//! - `web` hands out the web app beside the API and guards a server without a token;
+//!   `user_dirs` is where a start without `--config` finds its configuration.
 
 mod app;
+mod blobs;
 mod caption;
-mod catalog;
 mod codex_login;
+mod compaction_item;
 mod config;
-mod configuration;
+mod config_file;
+#[cfg(windows)]
+mod console;
+mod data_dir;
 mod error;
 mod http;
 mod management;
-mod media;
+mod mcp;
+mod model_catalog;
 mod presets;
 mod provider;
 mod sampling;
+mod search;
 mod session;
+mod session_model;
 #[cfg(windows)]
 mod shell_window;
 mod skills;
 mod subagents;
+mod web;
 
 use std::ffi::OsStr;
 use std::net::SocketAddr;
@@ -48,6 +68,12 @@ pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
 
 fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
   let args: Vec<String> = std::env::args().skip(1).collect();
+  // The MCP bridge speaks to a running server: wish mcp list|describe|call ...
+  if args.first().map(String::as_str) == Some("mcp") {
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let code = rt.block_on(mcp::cli::run(args[1..].to_vec()));
+    std::process::exit(code);
+  }
   let mut path: Option<PathBuf> = None;
   // A bare double-click opens the application window; any argument means an operator is present.
   let mut shell = if args.is_empty() { Shell::Window } else { Shell::Headless };
@@ -85,21 +111,7 @@ fn run_inner() -> Result<(), Box<dyn std::error::Error>> {
       }
       "--version" | "-V" => version = true,
       "--help" | "-h" => {
-        cli_out(
-          "wish [--config <config.json>] [--port <port>] [--no-window] [--window] [--browser] [--open <session-id>]
-One HTTP service for providers and sessions, with a web interface.
-
-Without --config, wish looks for config.json beside the executable, then in the
-user's platform folder (Documents\\Wish on Windows, ~/Library/Application
-Support/Wish on macOS, ~/.config/wish on Linux), generating a default one there
-on first run.
---port overrides the listen port from the config for this run only.
-Without other flags wish opens its interface in an application window;
---no-window serves headless and --browser uses the system browser instead.
---open jumps straight to one session (the interface opens there instead of the
-session list).
-",
-        );
+        cli_out(HELP_TEXT);
         return Ok(());
       }
       other => return Err(format!("unknown argument: {other}").into()),
@@ -120,24 +132,35 @@ session list).
   if generated {
     cli_out(&format!("wish generated a default config at {}\n", config_path.display()));
   }
+  // Older data directories are brought up to this version's layout first.
+  crate::migration::run(&config_path)?;
+  #[cfg(windows)]
+  console::install();
+  let mut config: config::Config = serde_json::from_slice(&std::fs::read(&config_path)?)?;
+  if let Some(port) = port {
+    config.listen.set_port(port);
+  }
+  let web_app = web::find_app_dir(config.web_dir.as_deref())?;
+  let allowed_hosts = config.allowed_hosts.clone();
   let (app, listener) = rt.block_on(async {
-    let mut config: config::Config = serde_json::from_slice(&tokio::fs::read(&config_path).await?)?;
-    if let Some(port) = port {
-      config.listen.set_port(port);
-    }
     let app = app::App::open(&config, config_path.clone()).await?;
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
     Ok::<_, Box<dyn std::error::Error>>((app, listener))
   })?;
   let addr = listener.local_addr()?;
+  app.mcp.bridge.set_address(addr);
+  let front = Arc::new(web::WebFront::new(web_app, addr, &allowed_hosts, app.bearer_token.is_some()));
   match shell {
     Shell::Headless => {
       cli_out(&format!("wish listening on http://{addr}\n"));
-      rt.block_on(serve(app, listener))?;
+      if front.app_dir().is_some() {
+        cli_out(&format!("open {} in a browser\n", host_url(addr)));
+      }
+      rt.block_on(serve(app, front, listener))?;
     }
     Shell::Window | Shell::Browser => {
       let server = std::thread::spawn(move || {
-        let _ = rt.block_on(serve(app, listener));
+        let _ = rt.block_on(serve(app, front, listener));
       });
       if matches!(shell, Shell::Window) {
         let profile = config_path.parent().map(|dir| dir.join("window-profile"));
@@ -161,7 +184,9 @@ session list).
           let _ = profile;
           // No native WebView host exists off Windows yet: say the system
           // browser is the fallback instead of implying a window opened.
-          cli_out("wish has no native window on this platform yet; falling back to the system browser\n");
+          cli_out(
+            "wish has no native window on this platform yet; falling back to the system browser\n",
+          );
           open_system_browser(addr);
         }
       } else {
@@ -174,18 +199,40 @@ session list).
   Ok(())
 }
 
+const HELP_TEXT: &str = "wish [--config <config.json>] [--port <port>] [--no-window] [--window] [--browser] [--open <session-id>]
+wish mcp <list|describe|call> ... talks to a running server's MCP bridge
+One HTTP service for providers and sessions, with a web interface.
+
+Without --config, wish looks for config.json beside the executable, then in the
+user's platform folder (Documents\Wish on Windows, ~/Library/Application
+Support/Wish on macOS, ~/.config/wish on Linux), generating a default one there
+on first run.
+--port overrides the listen port from the config for this run only.
+Without other flags wish opens its interface in an application window;
+--no-window serves headless and --browser uses the system browser instead.
+--open jumps straight to one session (the interface opens there instead of the
+session list).
+";
+
 /// Serve HTTP until the shutdown signal; the signal (Ctrl-C where a console
-/// exists) drains sessions before the process exits.
-async fn serve(app: Arc<app::App>, listener: tokio::net::TcpListener) -> Result<(), Box<dyn std::error::Error>> {
+/// exists, or the console closing on Windows) drains sessions before exit.
+async fn serve(
+  app: Arc<app::App>,
+  front: Arc<web::WebFront>,
+  listener: tokio::net::TcpListener,
+) -> Result<(), Box<dyn std::error::Error>> {
   let shutdown = app.clone();
-  let result = axum::serve(listener, http::build_router(app.clone()))
+  let result = axum::serve(listener, http::build_router(app.clone(), front))
     .with_graceful_shutdown(async move {
       wait_for_signal().await;
       shutdown.begin_shutdown().await;
     })
     .await;
   app.begin_shutdown().await;
-  app.finish_shutdown().await?;
+  let finished = app.finish_shutdown().await;
+  #[cfg(windows)]
+  console::release();
+  finished?;
   result?;
   Ok(())
 }
@@ -378,9 +425,14 @@ async fn wait_for_signal() {
       .expect("install SIGTERM handler");
     tokio::select! {_=tokio::signal::ctrl_c()=>{},_=terminate.recv()=>{}}
   }
-  #[cfg(not(unix))]
+  #[cfg(windows)]
   {
-    tokio::signal::ctrl_c().await.expect("install Ctrl-C handler");
+    let mut ctrl_break = tokio::signal::windows::ctrl_break().expect("install Ctrl-Break handler");
+    tokio::select! {
+      _ = tokio::signal::ctrl_c() => {},
+      _ = ctrl_break.recv() => {},
+      _ = console::wait_for_close() => {},
+    }
   }
 }
 #[cfg(test)]

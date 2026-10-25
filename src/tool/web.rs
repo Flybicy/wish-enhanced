@@ -2,7 +2,8 @@
 //! One provider serves search; fetch speaks plain HTTP with SSRF restrictions.
 //! Fetched pages and search results are cached in memory for one hour.
 
-use crate::executor::tool::{ToolCall, ToolExecutor, ToolOutcome};
+use crate::executor::{ExecutionControl, tool::ToolExecutor};
+use crate::session::{ToolCall, ToolOutcome};
 use crate::protocol::Tool;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -28,6 +29,15 @@ pub struct WebConfig {
   /// Environment variable holding the provider's API key, when one is needed.
   pub api_key_env: Option<String>,
 }
+impl Default for WebConfig {
+  fn default() -> Self {
+    Self {
+      provider: SearchProvider::DuckDuckGo,
+      fetch_timeout: Duration::from_secs(20),
+      api_key_env: None,
+    }
+  }
+}
 
 const USER_AGENT: &str =
   "Mozilla/5.0 (compatible; wish-agent/1.0; +https://github.com/WindustH/wish-core)";
@@ -51,22 +61,10 @@ impl WebTool {
     Self { config, cache: Arc::new(Mutex::new(HashMap::new())), next_id: AsyncMutex::new(1) }
   }
 
+  /// The fetch and read tools; `web_search` itself belongs to the application's
+  /// search providers (see `tool::web_search`), so it is not offered here.
   pub fn get_specifications(&self) -> Vec<Tool> {
     vec![
-      Tool {
-        name: "web_search".into(),
-        description: "Search the web. Returns {id, results:[{title,url,snippet}]}; pass the id           to get_search_content to read a result in full."
-          .into(),
-        input_schema: json!({
-          "type": "object",
-          "properties": {
-            "query": {"type": "string", "description": "The search query"},
-            "num_results": {"type": "integer", "minimum": 1, "maximum": 20,
-              "description": "How many results to return (default 8)"}
-          },
-          "required": ["query"]
-        }),
-      },
       Tool {
         name: "fetch_content".into(),
         description: "Fetch a web page and return its content as text. HTML is stripped to           readable text; binary content is refused. The page is cached for one hour."

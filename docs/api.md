@@ -20,13 +20,16 @@ goes through this API, so any other client can do the same.
 ## Conventions
 
 **Base path.** Application routes live under `/api`. Only `/health` and
-`/version` are outside it.
+`/version` are outside it; every other path is the web app's when one is
+installed (see `web_dir` in the [configuration](configuration.md)), and an
+unmatched `/api` path is always the API's `404`.
 
 **Authentication.** When `bearer_token_env` is set in the
 [configuration](configuration.md), every matched `/api` route requires
 `Authorization: Bearer <token>`. A missing or wrong token returns
 `401 {"error":{"message":"unauthorized"}}`. `/health`, `/version` and unmatched
-paths are public. Browsers cannot attach headers to `EventSource`, so browser
+paths are public. The [MCP bridge](#the-bridge) is the exception: it takes a
+session's own token instead, and the application's token is refused there. Browsers cannot attach headers to `EventSource`, so browser
 clients read SSE with `fetch`, or sit behind a proxy that injects the header,
 as `wish-web`'s `serve.ts` does.
 
@@ -34,8 +37,13 @@ as `wish-web`'s `serve.ts` does.
 pages on other origins: it replies to CORS preflights without authentication
 and adds `Access-Control-Allow-Origin: *` to every response, including `401`.
 Such a page still needs the token for anything else. A server without a token
-sends no CORS headers, so browsers only let pages from its own origin call it;
-an arbitrary website cannot use a visitor's browser to reach a local Wish.
+sends no CORS headers, so browsers only let pages from its own origin call it.
+It also answers only requests whose `Host` is `localhost`, `127.0.0.1` or
+`[::1]` on its port, its `listen` address or one of `allowed_hosts`, refusing
+others with `421`, and refuses a `POST`, `PUT`, `PATCH` or `DELETE` whose
+`Origin` is another origin or whose `Sec-Fetch-Site` is not `same-origin` with
+`403`. So an arbitrary website cannot use a visitor's browser to reach a local
+Wish, not even by pointing its own domain at it.
 
 **Bodies.** Request and response bodies are JSON. Most request bodies reject
 unknown fields. Every `/api` request body is limited to 32 MiB; a larger one
@@ -99,6 +107,8 @@ engine error, for example
 | GET | `/version`, `/api/version` | Build name and version |
 | GET | `/api/status` | Session count and scheduler activity |
 | GET | `/api/storage` | Bytes on disk |
+| GET | `/api/storage/sessions` | What each session keeps |
+| POST | `/api/storage/prune` | Clear history the context no longer uses |
 | GET | `/api/events` | Application event stream (SSE) |
 | GET, PUT | `/api/config` | Read or replace the configuration |
 | GET | `/api/defaults` | Defaults for new sessions |
@@ -109,6 +119,7 @@ engine error, for example
 | GET | `/api/providers` | Configured providers |
 | GET | `/api/providers/{id}` | One enabled provider |
 | GET | `/api/providers/{id}/models` | Upstream model catalog page |
+| POST | `/api/provider-draft/models` | Catalog page of a provider not saved yet |
 | GET | `/api/providers/{id}/account` | Upstream account reading |
 | POST, GET | `/api/providers/{id}/chatgpt-login` | Start or poll a ChatGPT sign-in |
 | POST | `/api/providers/{id}/chatgpt-login/complete` | Finish a sign-in from a pasted redirect URL |
@@ -121,6 +132,7 @@ engine error, for example
 | PUT | `/api/sessions/{id}/config` | Replace the session configuration |
 | PUT | `/api/sessions/{id}/metadata` | Replace the session metadata |
 | PUT | `/api/sessions/{id}/shell` | Give the session its own shell, or follow the global one |
+| PUT | `/api/sessions/{id}/tools` | Switch the session's optional tools |
 | POST | `/api/sessions/{id}/input` | Queue user input and run |
 | POST | `/api/sessions/{id}/messages` | Queue one message without running |
 | POST | `/api/sessions/{id}/run` | Start or resume execution |
@@ -128,6 +140,15 @@ engine error, for example
 | POST | `/api/sessions/{id}/compact` | Compact the context now |
 | POST | `/api/sessions/{id}/context/clear` | Start an empty context |
 | PATCH, DELETE | `/api/sessions/{id}/queue/{entry}` | Reorder or cancel queued input |
+| POST | `/api/sessions/{id}/answer` | Answer or skip an `ask_user` form |
+| GET | `/api/mcp/servers` | Configured MCP servers and what is known of them |
+| POST | `/api/mcp/servers/{id}/check` | Connect to an MCP server and list its tools |
+| GET | `/api/search-presets` | The search services Wish knows |
+| GET | `/api/search/providers` | Configured search providers and whether each can search now |
+| POST | `/api/search/providers/{id}/check` | Run one test search on a saved search provider |
+| GET | `/api/sessions/{id}/mcp/servers` | MCP bridge: servers and tools (session token) |
+| GET | `/api/sessions/{id}/mcp/tool` | MCP bridge: one tool's definition (session token) |
+| POST | `/api/sessions/{id}/mcp/call` | MCP bridge: call a tool (session token) |
 | GET | `/api/sessions/{id}/events` | Session event stream (SSE) |
 | GET | `/api/sessions/{id}/history` | Conversation timeline |
 | POST | `/api/sessions/{id}/history/query` | Filtered chronological history |
@@ -170,10 +191,64 @@ memory. Check `active_sessions` before restarting the server.
 ### `GET /api/storage`
 
 `{"bytes": {"total", "blobs", "executions", "session_data", "service_data"}, "counts": {...}}`.
-`session_data` is the engine database, `service_data` the management index,
-`blobs` the attachments and `executions` the captured shell output. The
-`counts` fields are reserved and currently `null`. Neither status endpoint
-loads any conversation.
+`session_data` is the engine database, `service_data` the management index
+(each with its WAL), `blobs` the attachments and `executions` the captured
+shell output; `total` is their sum, and nothing else in the data directory is
+counted. The `counts` fields are reserved and currently `null`. Neither status
+endpoint loads any conversation.
+
+### `GET /api/storage/sessions`
+
+Every session with what it keeps, newest first:
+
+```json
+{"sessions": [{"id": "8c1f...", "name": "Refactor parser", "provider": "openai", "model": "gpt-5",
+  "cwd": "/home/me/project", "created_at": 1758790000000, "updated_at": 1758790500000,
+  "phase": "Idle", "running": false, "tags": ["work"], "context_tokens": 48210,
+  "messages": {"user": 12, "assistant": 12, "tool_calls": 31},
+  "bytes": {"history": 812345, "attachments": 20480, "shell": 3072, "total": 835897}}],
+ "bytes": {"history": 812345, "attachments": 20480, "shell": 3072, "total": 835897}}
+```
+
+`history` is the session's records in the engine database, counted as stored
+values: the search index built over them and SQLite's own overhead are not
+included, so the sessions' totals stay below the database file's size.
+`attachments` and `shell` are the session's files under `blobs/` and `shell/`.
+`messages` counts the user and assistant messages and the tool calls in the
+session's history. No conversation is loaded.
+
+### `POST /api/storage/prune`
+
+Clears the history sessions keep but their context no longer uses. Body, every
+field optional: `{"sessions": ["8c1f..."], "before": 1758790000000, "dry_run": true}`.
+Without `sessions` every session is pruned; without `before` everything unused
+goes, and with it only what was recorded earlier.
+
+What goes, per session:
+
+- messages outside the active and standby contexts that are not waiting in the
+  queue;
+- events, except a suspended run's outcome;
+- the history records and search index of both;
+- the attachments, images and command output that only those messages named.
+  Uploads never sent, and commands still running, stay.
+
+What the context uses stays, so the conversation carries on. Entry IDs and
+history sequences keep their numbers: a cleared position is skipped when read.
+The timeline and history search no longer show what was cleared.
+
+```json
+{"messages": 1592, "events": 7040, "files": 461,
+ "bytes": {"history": 27152989, "files": 1667460, "total": 28820449},
+ "sessions": [{"id": "8c1f...", "messages": 12, "events": 80, "files": 3, "bytes": {...}}],
+ "skipped": [{"id": "5d0e...", "reason": "running"}],
+ "database": {"before": 106714016, "after": 38690816}}
+```
+
+A running session is skipped rather than waited for. With `dry_run` nothing
+changes and the counts tell what would go. Otherwise the database is compacted
+once at the end: `database` gives its size on disk before and after, and each
+pruned session's event stream gets `{"type": "history_pruned"}`.
 
 ## Configuration
 
@@ -262,10 +337,46 @@ served with a warning naming its age. Returns `501` without `model_list`, `400`
 without `model_list_path`, `502` when the upstream fails. Saving the
 configuration empties the cache.
 
+### `POST /api/provider-draft/models`
+
+The same page for a provider that is not saved yet, read with the settings the
+body carries, so a setup can list models to choose from and learn that a key is
+refused before saving anything. Nothing is saved or cached.
+
+```json
+{"id": "deepseek", "provider": {"protocol": "deepseek_chat", "...": "..."}, "cursor": null, "limit": 100}
+```
+
+`provider` is one entry of the configuration's `providers`. Secrets sent back as
+`<redacted>` are taken from the configured provider named `id`, as a save takes
+them. Answers and errors as above.
+
 ### `GET /api/providers/{id}/account`
 
 The provider's account reading (balance, quota or rate limits, depending on the
-`account_state` protocol). Returns `501` if none is configured.
+`account_state` protocol), asked on the protocol's own host or on
+`account_state_base_url`. Returns `501` if none is configured.
+
+```json
+{"protocol": "OpenAiCodexUsage", "plan_type": "plus", "availability": null,
+ "balances": [],
+ "quotas": [{"id": "primary", "name": null, "unit": "unknown", "used": null, "limit": null,
+             "remaining": null, "used_percent": "2", "window": {"duration": 300, "unit": "minutes"},
+             "resets_at": "1790513311", "reached": false, "unlimited": null, "parts": []}],
+ "failure": null, "warnings": []}
+```
+
+Amounts are decimal strings exactly as the service reported them, and missing ones
+are `null`, never `0`. A balance has `currency`, `available`, `total` and the parts
+the service splits it into (`cash`, `granted`, `topped_up`, `voucher`, `credit`,
+`owed`). A window's `unit` says what it counts (`tokens`, `requests`, `credits`,
+`time`, `currency_minor` or `unknown`), and `window` its length, usually in minutes
+(`months` for a calendar month). `parts` splits what was used among what shares the
+allowance, such as the tools behind a monthly call quota (`[{"id": "search-prime",
+"used": "4"}]`); it is empty when the service gives no breakdown. `resets_at` is as the service wrote it: Unix
+seconds, Unix milliseconds or a date. A refusal reported inside a successful reply,
+such as a rejected key or an empty account, is `failure` with a `kind` of
+`Unauthorized`, `Unpaid`, `Throttled` or `Unknown`.
 
 ### ChatGPT sign-in
 
@@ -323,7 +434,7 @@ Session endpoints return a session as `{"session": descriptor, "status": status}
 {
   "session": {
     "id": "8c1f...", "name": "Refactor parser", "provider": "openai",
-    "cwd": "/home/me/project", "shell": true,
+    "cwd": "/home/me/project", "tools": {"shell": true, "ask_user": true, "mcp": false, "web_search": true},
     "created_at": 1758790000000, "updated_at": 1758790500000, "revision": 7
   },
   "status": {
@@ -331,7 +442,7 @@ Session endpoints return a session as `{"session": descriptor, "status": status}
     "config": {"model": "gpt-5", "stream": true, "tools": [...], "run": {"tools": "Serial"}},
     "metadata": {"tags": ["work"]},
     "active_generation": 3, "queue_head": 12, "queue_count": 0,
-    "standby_preparing": false, "context_tokens": 48210
+    "standby_preparing": false, "context_tokens": 48210, "pending_questions": []
   }
 }
 ```
@@ -340,7 +451,7 @@ Descriptor fields:
 
 | Field | Meaning |
 | --- | --- |
-| `shell` | Whether the session has shell tools |
+| `tools` | The session's optional built-in tools: `{"shell", "ask_user", "mcp", "web_search"}`, each a boolean |
 | `shell_command` | The session's own `{program, args}`. Absent when it follows the global `shell` setting |
 | `pending_selection` | A provider/model change made while running, not yet in effect |
 
@@ -357,6 +468,7 @@ Status fields:
 | `context_tokens` | Input tokens of the last completed conversation call in the active context, made with the configured model. Compaction compares this with `trigger_tokens`. `null` until such a call exists |
 | `selection_pending` | A model change waits for the next step boundary |
 | `last_operation` | The last `operation_finished` or `operation_failed` event |
+| `pending_questions` | Open [`ask_user` forms](#questions-to-the-user), oldest first |
 
 ### Session configuration
 
@@ -374,9 +486,13 @@ Status fields:
 | `compaction` | no | `{"trigger_tokens", "target_tokens", "segment_tokens", "estimator"}`; requires `0 < target < trigger` and `segment > 0`. Absent disables compaction |
 
 Every session gets `history_search`, `history_read`, `history_query` and
-`view_image`. A session created with `shell: true` also gets `shell_start`,
-`shell_edit`, `shell_poll`, `shell_write` and `shell_kill`. On updates `tools`
-may list these names; any other name is rejected.
+`view_image`. With `tools.shell` it also gets `shell_start`, `shell_edit`,
+`shell_poll`, `shell_write` and `shell_kill`, with `tools.ask_user` it gets
+`ask_user`, and with `tools.web_search` it gets [`web_search`](#web-search). On updates `tools` may list these names; any other name is
+rejected. With the shell on, `shell_start`'s description ends with a fixed note
+on `wish mcp` (see [MCP servers](#mcp-servers)). `tools.mcp` adds no tool and
+changes nothing in the tool list: it decides whether that command may reach
+the servers.
 
 ### `GET /api/sessions`
 
@@ -392,7 +508,7 @@ loading any conversation.
 {
   "provider": "openai",
   "cwd": "/home/me/project",
-  "shell": true,
+  "tools": {"shell": true},
   "name": "Refactor parser",
   "metadata": {"tags": ["work"]},
   "config": {"model": "gpt-5", "stream": true, "tools": [], "run": {"tools": "Serial"}}
@@ -400,7 +516,10 @@ loading any conversation.
 ```
 
 `provider`, `cwd` (an existing absolute directory) and `config` are required.
-`initial_messages` optionally seeds the context with messages. Returns `201`
+`tools` switches optional tools; each switch left out keeps its default: no
+shell, no web search, `ask_user` on and MCP on. `web_search` stays off, even when
+asked for, while no search provider can answer. `initial_messages` optionally seeds the context with
+messages. Returns `201`
 with the session. `404` if the provider is unknown or disabled.
 
 ### `GET /api/sessions/{id}`
@@ -425,15 +544,18 @@ Returns the updated session.
 ### `DELETE /api/sessions/{id}`
 
 Deletes the session, its attachments and its shell output, and stops its
-background commands. Returns `204`, or `409` while it runs. Usage statistics
-are kept.
+background commands and its own MCP server instances. Returns `204`, or `409` while it runs. Usage statistics
+are kept. The room its history took in the database, search index included,
+goes back to the file system before the response.
 
 ### `POST /api/sessions/{id}/fork`
 
-Creates `"<name> (copy)"` with the same provider, directory, shell flag,
+Creates `"<name> (copy)"` with the same provider, directory, tool switches,
 configuration and metadata, seeded with the current context (not the full
-history). The shell override is not copied. Returns `201` with the new
-session, or `409` while the source runs.
+history). Summaries and compaction items in that context stay context in the
+copy: they are not added to its history, and later summaries start after them.
+The shell override is not copied. Returns `201` with the new session, or `409`
+while the source runs.
 
 ### `PUT /api/sessions/{id}/config`, `PUT /api/sessions/{id}/metadata`
 
@@ -446,7 +568,16 @@ or `409` while it runs.
 validated like the global one (`args: null` picks arguments from the shell's
 name, `{}` means the platform default). `null` returns it to the global
 setting. Takes effect from the next command, even while the session runs.
-Returns `400` for a session without shell tools.
+Returns `400` while the session's shell is switched off.
+
+### `PUT /api/sessions/{id}/tools`
+
+`{"shell": false}`, `{"ask_user": true}`, `{"mcp": true}` or any of them together
+switch the session's optional tools; a switch left out stays as it is. The
+session's tool list is rebuilt to match. Switching the shell off keeps
+background commands running, and they still report when they finish.
+Switching MCP off closes the session's own MCP server instances. Returns the session, `400` if the shell cannot
+start, or `409` while the session runs.
 
 ## Input and execution
 
@@ -506,6 +637,121 @@ searchable. Returns the session, or `409` while running.
 another; `{"before": null}` moves it to the end. `DELETE` cancels it. Both
 return `204`, work during a run, and return `409` if either entry was already
 consumed or cancelled.
+
+## Questions to the user
+
+With `tools.ask_user` the model can call `ask_user` to put a form of 1 to 8
+questions to the user. Each is a `choice` (2 to 8 options, one or several
+picked, and an answer of the user's own unless `allow_other` is false) or a
+`text` question. The call waits like any other tool: input sent meanwhile
+queues as usual, and an interrupt cancels the call. The model may set
+`timeout_seconds`; when that passes, the call returns `timed_out` and the form
+stays open for a late answer. See [tools](internals/tools.md#ask_user) for the
+tool's arguments and results.
+
+An open form in `status.pending_questions`:
+
+```json
+{"call_id": "call_7", "asked_at": 1758790500000, "timeout_seconds": 300, "timed_out": false,
+ "questions": [
+   {"type": "choice", "question": "Which database?", "header": "Database",
+    "options": [{"label": "SQLite"}, {"label": "PostgreSQL", "description": "a server"}],
+    "multi_select": false, "allow_other": true, "multiline": false},
+   {"type": "text", "question": "Table prefix?", "placeholder": "app_",
+    "multi_select": false, "allow_other": false, "multiline": false}]}
+```
+
+Open forms live in memory; a restart closes them.
+
+### `POST /api/sessions/{id}/answer`
+
+```json
+{"call_id": "call_7", "answers": [{"selected": ["PostgreSQL"]}, {"text": "app_"}]}
+```
+
+One answer per question, in order: `{"selected": [labels], "other": "..."}` for
+a choice (either part may be left out), `{"text": "..."}` for a text question,
+or `{"skipped": true}`. At least one question must be answered. `{"call_id",
+"skip": true}` declines the whole form.
+
+Returns `{"delivered": ...}`:
+
+| Value | Meaning |
+| --- | --- |
+| `now` | The waiting call returns the answers |
+| `later` | The call had timed out. The answers are queued as a `Developer` message with metadata `{"source": "ask_user_answer", "call_id", "questions", "answers"}`, and the session runs to read them, like a background command's report |
+| `dropped` | A timed-out form was skipped; nothing is sent |
+
+`400` for answers that do not fit the form, `404` for a form that is not open,
+`409` if it was already answered.
+
+## MCP servers
+
+The servers in the configuration's [`mcp`](configuration.md#mcp-servers)
+section are reached from a session's shell, never through the model's tool
+list. The model runs `wish mcp` in the session's shell:
+
+```sh
+wish mcp list                         # servers and their tools, one line each
+wish mcp describe fetch/fetch         # a tool's description and parameter schema
+wish mcp call fetch/fetch '{"url": "https://example.com"}'
+printf '%s' "$ARGS" | wish mcp call fetch/fetch     # arguments on standard input
+wish mcp call --json fetch/fetch '{...}'            # the whole result as the protocol gives it
+```
+
+`call` prints text content as text and structured content as JSON when nothing
+else says it. Images, audio and binary resources are saved under
+`shell/<session>/mcp/` in the data directory and printed as their paths, so the
+model can open an image with `view_image`. The exit status is `0` when done, `1`
+when the tool reported an error, `2` when nothing was called (a usage error, an
+unknown server or tool, a server that could not start) and `3` when the
+outcome is unknown: the connection closed or the call ran past its `timeout`,
+so it may have taken effect.
+
+### The bridge
+
+`wish mcp` is a client of three routes. Each session's shell runs with
+`WISH_URL` (this server's `/api` on the loopback address), `WISH_SESSION` and
+`WISH_MCP_TOKEN`, a token made when the session opens and known only to its
+shell, and with a directory linking to the Wish program first on `PATH`. The
+routes take `Authorization: Bearer <that token>` and answer that session only;
+the application's token is refused. While the session has `tools.mcp` off they
+return `409` with a message meant for the model: MCP is disabled for this
+session, and the user can enable it in the session's settings. That is the
+switch's only effect, so switching it never changes the model's request.
+
+| Route | Body or query | Returns |
+| --- | --- | --- |
+| `GET /api/sessions/{id}/mcp/servers` | `?server=` to list one | `[{"server", "tools": [{"name", "description"}]}]`, the description cut to its first line; a server that cannot be reached has `"error"` instead of `"tools"` |
+| `GET /api/sessions/{id}/mcp/tool` | `?server=&name=` | The tool as the server defines it: `name`, `description`, `inputSchema`, `outputSchema`, `annotations` |
+| `POST /api/sessions/{id}/mcp/call` | `{"server", "tool", "arguments"}` | The server's `CallToolResult`, with binary content replaced by `path` |
+
+Errors carry `details.kind`: `not_found` (`404`, no such server or tool),
+`connect` (`502`, the server could not start or be reached, with the end of its
+standard error), `rejected` (`422`, the server answered with an error) and
+`unknown` (`504`, no answer; a call may have taken effect). A call ends when its
+request does: interrupting the command drops the request, and the server is
+sent `notifications/cancelled`.
+
+### `GET /api/mcp/servers`
+
+Every configured server with what is known of it, for the settings page:
+
+```json
+[{"id": "fetch", "instances": 2, "server": {"name": "mcp-fetch", "version": "1.2.0"},
+  "tools": [{"name": "fetch", "description": "...", "inputSchema": {...}}],
+  "error": null, "stderr": "", "checked_at": 1758790500000}]
+```
+
+`tools` is `null` until the server has connected once; `error` is the last
+connection or listing failure; `stderr` is the end of a running instance's
+standard error.
+
+### `POST /api/mcp/servers/{id}/check`
+
+Starts the server on a connection of its own, lists its tools and closes it,
+whether or not it is enabled. Returns `{"server", "tools", "stderr"}`, or an
+error as above. The tools listed replace what is known of the server.
 
 ## History and records
 
@@ -706,9 +952,10 @@ cancels a run.
 
 - A run continues without any connected client. `interrupt` is the only way to
   stop it.
-- On `SIGINT` or `SIGTERM`, Wish stops accepting work, cancels runs, keeps the
-  partial output they had accepted, stops background shell commands, flushes
-  storage and exits. Streams end without a final event.
+- On `SIGINT` or `SIGTERM` (on Windows: Ctrl-C, Ctrl-Break, closing its
+  console window or system shutdown), Wish stops accepting work, cancels runs,
+  keeps the partial output they had accepted, stops background shell commands,
+  flushes storage and exits. Streams end without a final event.
 - After a restart, sessions load on first use and never resume by themselves.
   If the process was killed during a tool call, the session reports the
   unfinished state and does not repeat the call; `interrupt` settles it.
