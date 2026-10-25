@@ -25,6 +25,9 @@ pub struct WebFront {
   app_dir: Option<PathBuf>,
   /// The `host[:port]` names a browser may address this server by; `None` when it requires a token.
   hosts: Option<HashSet<String>>,
+  /// The token this server asks for, written into the page it serves so the app
+  /// can send it; `None` when the server takes writes from its own origin only.
+  token: Option<String>,
 }
 
 impl WebFront {
@@ -32,13 +35,17 @@ impl WebFront {
     app_dir: Option<PathBuf>,
     listen: SocketAddr,
     allowed_hosts: &[String],
-    token_required: bool,
+    token: Option<String>,
   ) -> Self {
-    let hosts = (!token_required).then(|| known_hosts(listen, allowed_hosts));
-    Self { app_dir, hosts }
+    let hosts = token.is_none().then(|| known_hosts(listen, allowed_hosts));
+    Self { app_dir, hosts, token }
   }
   pub fn app_dir(&self) -> Option<&Path> {
     self.app_dir.as_deref()
+  }
+  /// The token the page this server serves carries.
+  pub fn bearer_token(&self) -> Option<&str> {
+    self.token.as_deref()
   }
 }
 
@@ -143,6 +150,8 @@ pub async fn serve(front: &WebFront, request: Request) -> Response {
     _ => return not_found(),
   };
   let Ok(bytes) = tokio::fs::read(&file).await else { return not_found() };
+  let page = file.file_name().is_some_and(|name| name == "index.html");
+  let bytes = if page { page_with_token(bytes, front.bearer_token()) } else { bytes };
   let cache =
     if path.starts_with("/assets/") { "public, max-age=31536000, immutable" } else { "no-cache" };
   let body = if request.method() == Method::HEAD { Body::empty() } else { Body::from(bytes) };
@@ -155,6 +164,42 @@ pub async fn serve(front: &WebFront, request: Request) -> Response {
     body,
   )
     .into_response()
+}
+
+/// The web app's page with the token this server asks for in its markup, which
+/// the app reads and sends on every write. A page on another origin cannot read
+/// it: `cross_origin` answers no such headers for the app's own files.
+fn page_with_token(bytes: Vec<u8>, token: Option<&str>) -> Vec<u8> {
+  let Some(token) = token else { return bytes };
+  let Ok(text) = std::str::from_utf8(&bytes) else { return bytes };
+  let meta = format!(r#"<meta name="wish-bearer-token" content="{}" />"#, escaped(token));
+  // After `<head>` when the page has one, before everything else when it does not.
+  let lower = text.to_ascii_lowercase();
+  let head =
+    lower.find("<head").and_then(|start| lower[start..].find('>').map(|end| start + end + 1));
+  let page = match head {
+    Some(at) => format!("{}{meta}{}", &text[..at], &text[at..]),
+    None => format!("{meta}{text}"),
+  };
+  page.into_bytes()
+}
+
+/// A token for an attribute value, where quotes and ampersands mean something
+/// and a configuration may hold anything.
+fn escaped(token: &str) -> String {
+  token
+    .chars()
+    .fold(String::with_capacity(token.len()), |mut out, character| {
+      match character {
+        '&' => out.push_str("&amp;"),
+        '<' => out.push_str("&lt;"),
+        '>' => out.push_str("&gt;"),
+        '"' => out.push_str("&quot;"),
+        '\'' => out.push_str("&#39;"),
+        _ => out.push(character),
+      }
+      out
+    })
 }
 
 fn content_type(file: &Path) -> &'static str {
@@ -174,5 +219,54 @@ fn content_type(file: &Path) -> &'static str {
     "wasm" => "application/wasm",
     "txt" => "text/plain; charset=utf-8",
     _ => "application/octet-stream",
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  const PAGE: &str = r#"<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Wish</title>
+  </head>
+  <body><div id="app"></div></body>
+</html>
+"#;
+
+  // The page the server hands out carries the token, right after `<head>`, so
+  // the app reads it before anything else runs.
+  #[test]
+  fn the_page_carries_the_token_it_asks_for() {
+    let page = page_with_token(PAGE.as_bytes().to_vec(), Some("0123456789abcdef"));
+    let page = String::from_utf8(page).unwrap();
+    let meta = r#"<meta name="wish-bearer-token" content="0123456789abcdef" />"#;
+    let head = PAGE.find("<head>").unwrap() + "<head>".len();
+    assert!(page.contains(meta), "{page}");
+    assert_eq!(page.find(meta).unwrap(), head, "the token goes after <head>");
+    assert!(page.contains(r#"<title>Wish</title>"#), "the rest of the page stays");
+  }
+
+  // A server that asks for no token serves its page untouched, and a page with
+  // no `<head>` still gets the token ahead of everything else.
+  #[test]
+  fn no_token_leaves_the_page_alone() {
+    assert_eq!(page_with_token(PAGE.as_bytes().to_vec(), None), PAGE.as_bytes());
+    let page = page_with_token(b"<html><body>hi</body></html>".to_vec(), Some("t"));
+    assert_eq!(
+      String::from_utf8(page).unwrap(),
+      r#"<meta name="wish-bearer-token" content="t" /><html><body>hi</body></html>"#
+    );
+  }
+
+  // A token is configuration, so it is escaped for an attribute value rather
+  // than written into markup raw.
+  #[test]
+  fn a_token_is_escaped_for_markup() {
+    let page = page_with_token(PAGE.as_bytes().to_vec(), Some(r#"a"&<>'"#));
+    let page = String::from_utf8(page).unwrap();
+    assert!(page.contains(r#"content="a&quot;&amp;&lt;&gt;&#39;"#), "{page}");
   }
 }

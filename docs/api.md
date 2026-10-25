@@ -25,18 +25,23 @@ installed (see `web_dir` in the [configuration](configuration.md)), and an
 unmatched `/api` path is always the API's `404`.
 
 **Authentication.** When `bearer_token_env` is set in the
-[configuration](configuration.md), every matched `/api` route requires
-`Authorization: Bearer <token>`. A missing or wrong token returns
-`401 {"error":{"message":"unauthorized"}}`. `/health`, `/version` and unmatched
-paths are public. The [MCP bridge](#the-bridge) is the exception: it takes a
+[configuration](configuration.md), or `bearer_token` holds the token itself,
+every matched `/api` route requires `Authorization: Bearer <token>`. A missing or
+wrong token returns `401 {"error":{"message":"unauthorized"}}`. `/health`,
+`/version` and unmatched paths are public. The web app Wish serves reads the
+token from a `<meta name="wish-bearer-token">` tag in the page, so a first start
+with neither field set writes a generated token and works without further
+setup. The [MCP bridge](#the-bridge) is the exception: it takes a
 session's own token instead, and the application's token is refused there. Browsers cannot attach headers to `EventSource`, so browser
 clients read SSE with `fetch`, or sit behind a proxy that injects the header,
 as `wish-web`'s `serve.ts` does.
 
 **Cross-origin requests.** A server that requires a token also answers web
 pages on other origins: it replies to CORS preflights without authentication
-and adds `Access-Control-Allow-Origin: *` to every response, including `401`.
-Such a page still needs the token for anything else. A server without a token
+and adds `Access-Control-Allow-Origin: *` to its `/api` responses, `/health` and
+`/version`, including `401`. Such a page still needs the token for anything
+else, and the web app's own files carry no such headers, so a page on another
+origin cannot read the page that holds the token. A server without a token
 sends no CORS headers, so browsers only let pages from its own origin call it.
 It also answers only requests whose `Host` is `localhost`, `127.0.0.1` or
 `[::1]` on its port, its `listen` address or one of `allowed_hosts`, refusing

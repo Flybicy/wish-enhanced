@@ -11,7 +11,7 @@ use crate::server::{
   error::{ApiError, blocking},
   management::ManagementStore,
   mcp::McpHub,
-  provider::{self, Provider, Providers, read_secret},
+  provider::{self, Provider, Providers},
   search::{PreparedSearch, SearchHub},
   session::{CreateSession, Descriptor, SessionSlot, ToolSwitches},
   session_model::apply_agent_instructions,
@@ -153,11 +153,7 @@ impl App {
     let _ = std::fs::create_dir_all(&skills_dir);
     let config_file = ConfigFile::open(config_path, config.clone())?;
     let (events, _) = tokio::sync::broadcast::channel(256);
-    let bearer_token = config
-      .bearer_token_env
-      .as_ref()
-      .map(|key| read_secret(key).map_err(ApiError::bad_request))
-      .transpose()?;
+    let bearer_token = config.bearer_token()?;
     let mcp = McpHub::new(config.mcp.clone(), config.proxy.clone(), config.defaults.cwd.clone());
     let bridge = Bridge::new(&data_dir);
 

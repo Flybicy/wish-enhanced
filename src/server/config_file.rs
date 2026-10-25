@@ -60,7 +60,7 @@ fn hash(bytes: &[u8]) -> String {
 }
 
 /// Replaces a file whole or not at all, keeping its permissions.
-async fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ApiError> {
+pub(super) async fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ApiError> {
   let temp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
   let permissions = tokio::fs::metadata(path).await.map_err(ApiError::internal)?.permissions();
   tokio::fs::write(&temp, bytes).await.map_err(ApiError::internal)?;
@@ -122,6 +122,16 @@ const SECRETS: &[Secrets] = &[
       path: &["proxy", "password"],
       shown_empty: true,
       missing: |_, _| "redacted proxy password has no stored value".into(),
+    }],
+  },
+  // The token a first start wrote, and the page the server serves carries.
+  Secrets {
+    items: &[],
+    each: false,
+    fields: &[Secret {
+      path: &["bearer_token"],
+      shown_empty: false,
+      missing: |_, _| "redacted bearer token has no stored value".into(),
     }],
   },
   // An MCP server's environment and headers carry its keys.

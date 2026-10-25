@@ -91,7 +91,11 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
   crate::migration::run(&path)?;
   #[cfg(windows)]
   console::install();
-  let config: config::Config = serde_json::from_slice(&tokio::fs::read(&path).await?)?;
+  let mut config: config::Config = serde_json::from_slice(&tokio::fs::read(&path).await?)?;
+  // A configuration with no token has every write refused, which the web app
+  // served beside it cannot work around: a first start is given one, and the
+  // page it opens carries it.
+  config::ensure_bearer_token(&mut config, &path).await;
   let web_app = web::find_app_dir(config.web_dir.as_deref())?;
   let app = app::App::open(&config, path).await?;
   let listener = match tokio::net::TcpListener::bind(config.listen).await {
@@ -120,7 +124,7 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
     web_app,
     address,
     &config.allowed_hosts,
-    app.bearer_token.is_some(),
+    app.bearer_token.clone(),
   ));
   if front.app_dir().is_some() {
     let browsable = if address.ip().is_unspecified() {

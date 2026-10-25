@@ -24,9 +24,23 @@ function read(): Connection | null {
 /** Points the API client at the saved server. Call once, before any request. */
 export function applyConnection() {
   const saved = read();
-  if (!saved) return;
+  // No other server saved: this page's own server is the one in use, and the
+  // token it wrote into the page is what its writes ask for.
+  if (!saved) {
+    applyPageToken();
+    return;
+  }
   setBaseUrl(saved.baseUrl);
   setAccessToken(saved.token);
+}
+
+/** The token the server that served this page carries in its markup. A server
+ * started without one generates it on its first start, so the app beside it can
+ * save settings without an environment variable to set up first. */
+export function applyPageToken() {
+  const page = globalThis.document;
+  const token = page?.querySelector('meta[name="wish-bearer-token"]')?.getAttribute('content');
+  if (token) setAccessToken(token);
 }
 
 export const isSignedOut = () => storage()?.get(SIGNED_OUT) === '1';

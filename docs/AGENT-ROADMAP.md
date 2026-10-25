@@ -95,3 +95,11 @@ src/server/session/tools.rs:157-167,317-330 通过工具名分类副作用并在
 - `cargo test --bins` 通过 61/61；前端 typecheck/build 和审批专项测试 7/7 通过；全量 tools 测试唯一既有失败仍是 virtual-core 3.17.0 与测试期望 3.17.9 的版本差异。
 - 核心运行闭环和子 agent 权限衰减专项 agent 在完成前停止，未留下未验证改动；这些 P0 风险继续保持下一轮优先级。
 - 未发布、未提交、未部署；默认 bearer_token_env onboarding 仍为发布前阻断项。
+
+## Round 48 状态（wish-enhanced 同步线）
+
+- 上游 wish-core v0.2.2（DeepSeek 联网搜索、配额窗口独立判断）已快照合并；分叉版本线递增到 0.3.7。
+- 桌面 onboarding 阻断项已解除：无 token 的首启自动生成并写入 `bearer_token`，网页经 `<meta name="wish-bearer-token">` 取得它，`GET /api/config` 脱敏、保存回填；CORS 头只给 `/api`，应用自身文件不跨源可读。测试 53/53。
+- 便携与安装版启动修复：配置回退链（roaming→local→exe 旁→temp）、无控制台时自动开浏览器、二次启动打开已有实例、`--no-browser`。
+- 识图模型位 `vision_model`（provider 级，主模型不收图时带图请求改走它）与 retry jitter（默认 0.2）已实现。
+- 仍未完成：wish-web 界面「宣纸/中国传统色调」气质优化、本机 zcode/cc-haha 调研借鉴。

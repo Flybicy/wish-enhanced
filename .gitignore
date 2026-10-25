@@ -3,3 +3,7 @@
 # Local linker setup (machine-specific paths)
 /.cargo/
 dist-rehearsal/
+
+# Installer build output
+dist/
+installer/Output/

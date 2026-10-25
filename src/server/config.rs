@@ -1,8 +1,8 @@
 //! The configuration file's schema, and the checks a configuration passes at startup and on every
 //! save before anything is built from it.
 use crate::server::{
-  error::ApiError, mcp::McpConfig, provider::ProviderConfig, search::SearchConfig,
-  session::ToolSwitches,
+  error::ApiError, mcp::McpConfig, provider::ProviderConfig, provider::read_secret,
+  search::SearchConfig, session::ToolSwitches,
 };
 use crate::session::{CompactionConfig, SessionConfig};
 use crate::tool::shell::{self, ShellCommand};
@@ -20,6 +20,11 @@ pub struct Config {
   /// fails startup) leaves the server read-only: reads and diagnostics answer,
   /// every write is rejected.
   pub bearer_token_env: Option<String>,
+  /// The bearer token itself, for a configuration that keeps it in the file
+  /// instead of naming an environment variable. A start with neither set writes
+  /// a generated one here, so the web app served beside the server can
+  /// authenticate without an environment variable to set up first.
+  pub bearer_token: Option<String>,
   /// The built web app to hand out beside the API; `web` beside the program when absent.
   /// Read at startup.
   pub web_dir: Option<PathBuf>,
@@ -94,6 +99,39 @@ impl Config {
     self.mcp.validate(&self.providers)?;
     self.search.validate(&self.providers)?;
     self.usage.validate()
+  }
+  /// The bearer token this configuration asks for: the environment variable it
+  /// names when it names one, which must hold a value, otherwise the token the
+  /// file holds. `None` leaves the server refusing every write.
+  pub fn bearer_token(&self) -> Result<Option<String>, ApiError> {
+    match &self.bearer_token_env {
+      Some(name) => read_secret(name).map(Some).map_err(ApiError::bad_request),
+      None => Ok(self.bearer_token.clone().filter(|token| !token.is_empty())),
+    }
+  }
+  /// A token for a configuration that has none: 128 bits, hex, so it survives a
+  /// configuration file, a page's markup and a shell alike.
+  pub fn generate_bearer_token() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+  }
+}
+
+/// A start with no token configured gets one, kept in the configuration file so
+/// the web app served beside the server can authenticate: the page it opens
+/// carries the token, and a save from the settings page keeps it. A file that
+/// cannot be written leaves the token in memory for this run only, and the next
+/// start generates another.
+pub async fn ensure_bearer_token(config: &mut Config, path: &std::path::Path) {
+  if config.bearer_token_env.is_some()
+    || config.bearer_token.as_ref().is_some_and(|token| !token.is_empty())
+  {
+    return;
+  }
+  config.bearer_token = Some(Config::generate_bearer_token());
+  let Ok(bytes) = serde_json::to_vec_pretty(&config) else { return };
+  match crate::server::config_file::write_atomic(path, &bytes).await {
+    Ok(()) => eprintln!("wrote a bearer token to {}", path.display()),
+    Err(error) => eprintln!("could not keep a bearer token in {}: {error}", path.display()),
   }
 }
 /// The default of a switch that is on unless the file says otherwise.
@@ -303,6 +341,7 @@ impl Default for Config {
       listen: "127.0.0.1:9780".parse().unwrap(),
       data_dir: PathBuf::from("data"),
       bearer_token_env: None,
+      bearer_token: None,
       web_dir: None,
       allowed_hosts: Vec::new(),
       providers: BTreeMap::new(),
@@ -357,5 +396,33 @@ mod tests {
     let restored: Config = serde_json::from_value(value).unwrap();
     assert_eq!(restored.subagents.max_depth, original.subagents.max_depth);
     assert_eq!(restored.memory.pool_target_tokens, original.memory.pool_target_tokens);
+  }
+
+  // A first start has no token of either kind, and gets one written into the
+  // file: the environment variable stays unset, so nothing has to be configured
+  // before the web app beside the server can save its settings.
+  #[test]
+  fn a_start_without_a_token_gets_one_in_the_file() {
+    let mut config = Config::default();
+    assert!(config.bearer_token_env.is_none());
+    assert!(config.bearer_token.is_none());
+    let token = Config::generate_bearer_token();
+    assert_eq!(token.len(), 32, "128 bits, hex");
+    assert!(token.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    config.bearer_token = Some(token.clone());
+    assert_eq!(config.bearer_token().unwrap().as_deref(), Some(token.as_str()));
+    // An empty token in the file is no token at all.
+    config.bearer_token = Some(String::new());
+    assert_eq!(config.bearer_token().unwrap(), None);
+  }
+
+  // Naming an environment variable keeps asking for it: a name without a value
+  // is a startup error, not a server that silently stops asking.
+  #[test]
+  fn a_named_variable_outranks_the_file() {
+    let mut config = Config::default();
+    config.bearer_token_env = Some("WISH_TEST_TOKEN_THAT_IS_NOT_SET".into());
+    config.bearer_token = Some("in-the-file".into());
+    assert!(config.bearer_token().is_err());
   }
 }

@@ -173,14 +173,21 @@ async fn version() -> Json<Value> {
   Json(json!({"name":"wish","version":env!("CARGO_PKG_VERSION")}))
 }
 
-/// CORS for a token-bearing server: a page on another origin keeps read-only
-/// access (`Access-Control-Allow-Origin: *` never authorizes credentials), while
-/// every write it attempts is rejected in `authorize` before it reaches a
-/// handler. A server without a token answers its own origin only, so an
-/// arbitrary web page cannot drive a local agent through the visitor's browser.
+/// CORS for a token-bearing server: the API answers a reader on another origin
+/// (`Access-Control-Allow-Origin: *` never authorizes credentials), while every
+/// write it attempts is rejected in `authorize` before it reaches a handler. The
+/// app's own files answer no such headers, so a page on another origin cannot
+/// read the page that carries this server's token. A server without a token
+/// answers its own origin only, so an arbitrary web page cannot drive a local
+/// agent through the visitor's browser.
 
 async fn cross_origin(State(app): State<Arc<App>>, request: Request, next: Next) -> Response {
   if app.bearer_token.is_none() || !request.headers().contains_key(header::ORIGIN) {
+    return next.run(request).await;
+  }
+  let path = request.uri().path();
+  let api = path == "/api" || path.starts_with("/api/") || path == "/health" || path == "/version";
+  if !api {
     return next.run(request).await;
   }
   let preflight = request.method() == Method::OPTIONS

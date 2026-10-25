@@ -112,6 +112,7 @@ fields are rejected everywhere, so typos fail loudly.
 | `listen` | `"127.0.0.1:9780"` | Address and port to listen on, as `IP:port` (`[::1]:9780` for IPv6). Host names are not accepted |
 | `data_dir` | `"data"` | Where sessions and attachments are stored. A relative path is resolved against the directory Wish is started from, so prefer an absolute path |
 | `bearer_token_env` | `null` | Name of an environment variable holding the API access token. When set, every `/api` request needs `Authorization: Bearer <token>`; write requests are accepted only from this server's own origin or a CLI. The variable must be set and non-empty at startup. When unset, reads work but all write requests fail closed with HTTP 401 |
+| `bearer_token` | `null` | The access token itself, for a configuration that keeps it in the file instead of naming an environment variable. A start with neither set writes a generated one here, and the web app served beside Wish reads it from the page, so the desktop app works with nothing to configure. Shown as `<redacted>` by `GET /api/config`; see [Authentication](#authentication) |
 | `web_dir` | `null` | The built web app, served at `/`. When unset, Wish uses the `web` directory beside its program, where its packages and release archives put the app (a link to the program, such as `wish` on the `PATH`, is followed first); finding none, it serves the API alone. A directory set here must hold `index.html` |
 | `allowed_hosts` | `[]` | `host:port` names browsers may reach Wish by besides `localhost`, `127.0.0.1`, `[::1]` and `listen`, such as `192.168.1.20:8790` or `wish.example.com`. Requests addressed to another name are refused (`421`), and changes sent from another origin are refused (`403`), so a web page cannot drive Wish through a visitor's browser |
 | `providers` | `{}` | Model providers by ID; see [Providers](#providers) |
@@ -195,7 +196,23 @@ Credential names are `region`, `access_key_id`, `secret_access_key`,
 `session_token`, `account_id`, `workspace_id`, `team_id`, `organization` and
 `project`.
 
-### Presets
+### The server's own access token
+
+`bearer_token_env` names an environment variable holding the token `/api` asks
+for; `bearer_token` holds the token itself. Naming a variable wins when both are
+set, and the variable must be set and non-empty at startup.
+
+A start with neither writes a generated token into `bearer_token` and keeps it
+in the configuration file, so nothing has to be arranged before the web app
+beside Wish can save its settings: the page Wish serves carries the token in a
+`<meta>` tag, and the app sends it on every request. A page on another origin
+cannot read it — the app's own files answer no cross-origin headers, and the API
+rejects a write that does not carry the token. Read it from the configuration
+file to call the API from a script, or rotate it by editing the file and
+restarting. `GET /api/config` shows it as `<redacted>`; a save that sends it
+back unchanged keeps the stored value.
+
+## Presets
 
 Each preset fills in one service's address, protocols, catalog and account
 reading; the web app offers them when you add a provider. The first protocol
@@ -594,7 +611,7 @@ values, so protect it accordingly (for example `chmod 600`).
 | MCP servers | On the next call. An instance whose server changed, or would now be reached with another key or proxy, is closed and started again |
 | Defaults | For the next new session |
 | `usage.stream_sample_limit` | At once |
-| `listen`, `data_dir`, `bearer_token_env`, `web_dir`, `allowed_hosts` | After a restart. The API refuses to change them |
+| `listen`, `data_dir`, `bearer_token_env`, `bearer_token`, `web_dir`, `allowed_hosts` | After a restart. The API refuses to change them |
 | Values of environment variables | After a restart |
 
 Saves through the API check a revision, so two editors cannot overwrite each

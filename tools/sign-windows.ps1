@@ -21,8 +21,12 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2(
-  @($Pfx), $Password)
+# EphemeralKeySet: a PFX written by Python's `cryptography` keeps a CNG key with
+# no resolvable container, so every load that asks for a stored key set fails
+# with "keyset does not exist". The ephemeral load reaches the key regardless.
+$cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+  $Pfx, $Password,
+  [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
 if (-not $cert.HasPrivateKey) { throw "the pfx carries no private key" }
 Write-Host "signing as $($cert.Subject)"
 

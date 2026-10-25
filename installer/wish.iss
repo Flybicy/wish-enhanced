@@ -2,7 +2,7 @@
 ; Built by CI into dist/. Inputs: dist/wish/wish.exe, dist/wish/web/**, dist/wish/niubash/**
 
 #define MyAppName "Wish"
-#define MyAppVersion "0.3.7"
+#define MyAppVersion "0.3.8"
 #define MyAppPublisher "wish-enhanced"
 #define MyAppExeName "wish.exe"
 
