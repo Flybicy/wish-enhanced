@@ -191,6 +191,8 @@ jobs:
           Copy-Item target/release/wish.exe dist/wish/
           Copy-Item installer/WebView2Loader.dll dist/wish/
           Copy-Item installer/wish.ico dist/wish/
+          New-Item -ItemType Directory -Force -Path dist/wish/web | Out-Null
+          Copy-Item wish-web/dist/* dist/wish/web -Recurse -Force
           if (Test-Path dist/niubash/niu.exe) {
             Move-Item dist/niubash dist/wish/niubash -Force
           }
